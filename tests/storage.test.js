@@ -1,6 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createVocabularyEntry, DEFAULT_TYPE, initializeOfflineCache, loadSubTopics, saveSubTopics } from '../storage.js';
+import {
+  createVocabularyEntry,
+  DEFAULT_TYPE,
+  initializeOfflineCache,
+  loadSubTopics,
+  loadVocabulary,
+  saveSubTopics,
+  updateVocabularyEntryByWord,
+} from '../storage.js';
 import { getCurrentLanguage, getLanguageOptions, setCurrentLanguage } from '../language-manager.js';
 import { getVocabularyCollection, getSettingsCollection } from '../data-access.js';
 
@@ -200,6 +208,107 @@ test('toFirestorePayload preserves the canonical example and drops legacy exampl
 
   assert.equal(payload.example, 'One example sentence.');
   assert.deepEqual(payload.examples, { basic: 'One example sentence.' });
+});
+
+test('toFirestorePayload preserves additional example fields when present', () => {
+  const payload = toFirestorePayload({
+    word: 'schedule',
+    example: 'Please schedule the meeting.',
+    examples: {
+      basic: 'Please schedule the meeting.',
+      conversation: 'Can we schedule a call?',
+      lessonContext: 'We will schedule the meeting tomorrow.',
+    },
+  });
+
+  assert.deepEqual(payload.examples, {
+    basic: 'Please schedule the meeting.',
+    conversation: 'Can we schedule a call?',
+    lessonContext: 'We will schedule the meeting tomorrow.',
+  });
+});
+
+test('editing an entry preserves additional examples and expansion fields', async () => {
+  const originalWindow = globalThis.window;
+  const originalLanguage = getCurrentLanguage();
+  const entry = {
+    ...createVocabularyEntry(
+      'schedule',
+      'sắp xếp lịch',
+      'Please schedule the meeting.',
+      '/ˈʃedjuːl/',
+      'TOEIC',
+      'Lesson 1',
+      'Word',
+      { english: 'to arrange something for a specific time', vietnamese: 'sắp xếp lịch' },
+      ['arrange'],
+      ['cancel'],
+      'to arrange something for a specific time',
+      [{ word: 'schedule a meeting', meaning: 'lên lịch cuộc họp' }],
+      '',
+      '',
+      '',
+      {
+        basic: 'Please schedule the meeting.',
+        conversation: 'Can we schedule a call?',
+        lessonContext: 'We will schedule the meeting tomorrow.',
+      },
+      [{ word: 'scheduler', meaning: 'người lập lịch' }],
+      [{ word: 'on schedule', meaning: 'đúng lịch' }],
+      [{ word: 'schedule + noun', meaning: 'lên lịch cho việc gì' }],
+      [{ word: 'schedule a meeting', meaning: 'lên lịch cuộc họp' }],
+      [{ word: 'schedule a work', meaning: 'cách dùng sai' }],
+      [{ meaning: 'appointment', pos: 'noun', explanation: 'a planned meeting' }],
+    ),
+    customField: 'preserve this too',
+  };
+  const values = new Map([
+    ['vocabularyTrainer.vocabulary.english', JSON.stringify([entry])],
+    ['vocabularyTrainer.preferences.english', JSON.stringify({ topics: [], subTopics: [], soundEnabled: true })],
+  ]);
+  globalThis.window = {
+    localStorage: {
+      getItem: (key) => values.get(key) || null,
+      setItem: (key, value) => values.set(key, value),
+    },
+    dispatchEvent: () => {},
+  };
+
+  try {
+    setCurrentLanguage('english');
+    initializeOfflineCache('english');
+    await updateVocabularyEntryByWord('schedule', {
+      word: 'schedule',
+      example: 'Please schedule the meeting today.',
+      examples: { basic: 'Please schedule the meeting today.' },
+    });
+
+    const updated = loadVocabulary().find((item) => item.word === 'schedule');
+    assert.deepEqual(updated.examples, {
+      basic: 'Please schedule the meeting today.',
+      conversation: 'Can we schedule a call?',
+      lessonContext: 'We will schedule the meeting tomorrow.',
+    });
+    assert.deepEqual(updated.synonyms, [{ word: 'arrange', meaning: '' }]);
+    assert.deepEqual(updated.antonyms, [{ word: 'cancel', meaning: '' }]);
+    assert.deepEqual(updated.wordFamily, [{ word: 'scheduler', meaning: 'người lập lịch' }]);
+    assert.deepEqual(updated.fixedPhrases, [{ word: 'on schedule', meaning: 'đúng lịch' }]);
+    assert.deepEqual(updated.collocations, [{ word: 'schedule a meeting', meaning: 'lên lịch cuộc họp' }]);
+    assert.deepEqual(updated.sentencePatterns, [{ word: 'schedule + noun', meaning: 'lên lịch cho việc gì' }]);
+    assert.deepEqual(updated.commonExpressions, [{ word: 'schedule a meeting', meaning: 'lên lịch cuộc họp' }]);
+    assert.deepEqual(updated.commonMistakes, [{ word: 'schedule a work', meaning: 'cách dùng sai' }]);
+    assert.equal(updated.meaningsAnalysis[0].meaning, 'appointment');
+    assert.equal(updated.meaningsAnalysis[0].pos, 'noun');
+    assert.equal(updated.customField, 'preserve this too');
+  } finally {
+    setCurrentLanguage(originalLanguage);
+    initializeOfflineCache(originalLanguage);
+    if (originalWindow === undefined) {
+      delete globalThis.window;
+    } else {
+      globalThis.window = originalWindow;
+    }
+  }
 });
 
 test('language manager switches collections by language and exposes options', () => {

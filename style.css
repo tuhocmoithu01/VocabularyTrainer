@@ -212,6 +212,19 @@ select {
   gap: 12px;
 }
 
+.entry-mode-switch {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.entry-mode-switch button[aria-pressed="true"] {
+  border: 1px solid rgba(37, 99, 235, 0.35);
+  background: #eff6ff;
+  color: var(--primary);
+}
+
 .field-card {
   display: grid;
   gap: 6px;

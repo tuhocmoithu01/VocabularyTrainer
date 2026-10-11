@@ -105,7 +105,10 @@ export async function analyzeImageWithGeminiVision(imageDataUrl) {
       }),
     });
   } catch {
-    throw new Error('Không kết nối được API OCR. Hãy kiểm tra mạng rồi thử lại.');
+    if (/^http:\/\/(?:localhost|127\.0\.0\.1):3002\//.test(endpoint)) {
+      throw new Error('Không kết nối được máy chủ OCR cục bộ ở cổng 3002. Hãy chạy proxy-server.js rồi thử lại.');
+    }
+    throw new Error('Không kết nối được API OCR. Hãy kiểm tra máy chủ ứng dụng rồi thử lại.');
   }
 
   const text = await resp.text();

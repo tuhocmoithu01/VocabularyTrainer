@@ -83,6 +83,21 @@ global.fetch = async function (url, opts) {
       /OCR API failed \(HTTP 404\)/,
     );
 
+    global.fetch = async () => {
+      throw new TypeError('Failed to fetch');
+    };
+    global.window.location = { hostname: 'localhost' };
+    await assert.rejects(
+      mod.analyzeImageWithGeminiVision('data:image/png;base64,TEST'),
+      /máy chủ OCR cục bộ ở cổng 3002.*proxy-server\.js/,
+    );
+    global.window.location = { hostname: 'vocabulary.example.com' };
+    await assert.rejects(
+      mod.analyzeImageWithGeminiVision('data:image/png;base64,TEST'),
+      /Không kết nối được API OCR\. Hãy kiểm tra máy chủ ứng dụng/,
+    );
+    delete global.window.location;
+
     const [firebaseConfig, functionSource, clientSource, visionSource] = await Promise.all([
       readFile(new URL('../firebase.json', import.meta.url), 'utf8'),
       readFile(new URL('../functions/index.js', import.meta.url), 'utf8'),
@@ -114,7 +129,7 @@ global.fetch = async function (url, opts) {
     await mkdir(path.join(temporaryConfigDirectory, 'config'));
     await writeFile(
       path.join(temporaryConfigDirectory, 'config', 'api_gemini.js'),
-      'window.__GEMINI_CONFIG__ = { apiKey: "test-server-only-key", provider: "google", model: "gemini-3.5-flash-lite", authType: "API_KEY" };',
+      'window.__GEMINI_CONFIG__ = { apiKey: "AQ.mock-compatible-credential", provider: "google", model: "gemini-3.5-flash-lite", authType: "API_KEY" };',
     );
     process.chdir(temporaryConfigDirectory);
     const proxy = await startProxy(0);
@@ -133,7 +148,11 @@ global.fetch = async function (url, opts) {
       const localPayload = await localResponse.json();
       assert.equal(localResponse.status, 200, JSON.stringify(localPayload));
       assert.equal(localPayload.candidates[0].content.parts[0].text, '{"word":"local"}');
-      assert.equal(providerRequest.options.headers['x-goog-api-key'] !== undefined, true);
+      assert.equal(
+        providerRequest.options.headers['x-goog-api-key'],
+        'AQ.mock-compatible-credential',
+        'proxy should forward configured credentials without rejecting them by prefix',
+      );
       assert.equal(
         JSON.stringify({
           url: `http://127.0.0.1:${port}/api/gemini/vision`,

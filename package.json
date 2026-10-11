@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "test": "node tests/gemini-vision.mock.test.js"
+    "test": "node tests/gemini-vision.mock.test.js && node tests/image-paste.e2e.js"
   },
   "devDependencies": {
     "puppeteer": "^25.5.0"

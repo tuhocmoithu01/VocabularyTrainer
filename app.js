@@ -87,6 +87,9 @@ const ALL_FILTER_VALUE = '';
 const pageButtons = document.querySelectorAll('.menu-button');
 const pages = document.querySelectorAll('.page');
 const addForm = document.getElementById('add-form');
+const entryModeQuickButton = document.getElementById('entry-mode-quick');
+const entryModeDetailButton = document.getElementById('entry-mode-detail');
+const quickAddDetailsButton = document.getElementById('quick-add-details');
 const inputTopic = document.getElementById('input-topic');
 const inputSubtopic = document.getElementById('input-subtopic');
 const inputType = document.getElementById('input-type');
@@ -179,6 +182,7 @@ const imageImportStatus = document.getElementById('image-import-status');
 const imageImportChange = document.getElementById('image-import-change');
 const imageImportRerun = document.getElementById('image-import-rerun');
 const imageImportClear = document.getElementById('image-import-clear');
+let currentImageImportFile = null;
 
 // ===== SOUND SETTINGS =====
 const SOUND_ENABLED_KEY = 'soundEnabled';
@@ -443,6 +447,20 @@ function resetAddForm() {
   addSubmitButton.textContent = 'Lưu từ';
   addSubmitButton.disabled = false;
   addCancelButton.classList.add('hidden');
+}
+
+function setEntryMode(mode) {
+  const isQuickMode = mode === 'quick';
+  addForm.dataset.entryMode = isQuickMode ? 'quick' : 'detail';
+  addForm.querySelectorAll('.entry-mode-detail-only').forEach((element) => {
+    element.classList.toggle('hidden', isQuickMode);
+  });
+  addForm.querySelectorAll('.entry-mode-quick-only').forEach((element) => {
+    element.classList.toggle('hidden', !isQuickMode);
+  });
+  inputMeaning.required = !isQuickMode;
+  entryModeQuickButton?.setAttribute('aria-pressed', String(isQuickMode));
+  entryModeDetailButton?.setAttribute('aria-pressed', String(!isQuickMode));
 }
 
 function buildSelectOptions(items, includeAll = false, includeAdd = false) {
@@ -2759,6 +2777,7 @@ function selectSuggestion() {
 }
 
 function startEditMode(entry) {
+  setEntryMode('detail');
   editingWord = entry.word;
   addSubmitButton.textContent = 'Cập nhật';
   addSubmitButton.disabled = false;
@@ -2850,9 +2869,6 @@ async function runOCRFile(file) {
   if (!file) {
     throw new Error('Không có ảnh để đọc.');
   }
-  if (!navigator.onLine) {
-    throw new Error('Cần kết nối mạng để sử dụng Gemini OCR.');
-  }
   const dataUrl = await new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(reader.result);
@@ -2940,6 +2956,7 @@ async function processImageImport(file) {
     setImageImportStatus('Vui lòng chọn ảnh để import.', true);
     return;
   }
+  currentImageImportFile = file;
   try {
     const parsed = await runOCRFile(file);
     setImageImportStatus('✅ OCR thành công. Đang tự động mở rộng AI...');
@@ -2950,20 +2967,33 @@ async function processImageImport(file) {
   }
 }
 
+function getImageFileFromClipboard(clipboardData) {
+  const files = Array.from(clipboardData?.files || []);
+  const imageFile = files.find((file) => file.type.startsWith('image/'));
+  if (imageFile) {
+    return imageFile;
+  }
+
+  const items = Array.from(clipboardData?.items || []);
+  for (const item of items) {
+    if (item.kind !== 'file' && !item.type.startsWith('image/')) {
+      continue;
+    }
+    const file = item.getAsFile();
+    if (file?.type.startsWith('image/')) {
+      return file;
+    }
+  }
+  return null;
+}
+
 async function handleImagePaste(event) {
   if (!inputModeImage?.checked) {
     return;
   }
-  const items = event.clipboardData?.items;
-  if (!items) {
-    return;
-  }
-  const imageItem = Array.from(items).find((item) => item.type.startsWith('image/'));
-  if (!imageItem) {
-    return;
-  }
-  const file = imageItem.getAsFile();
+  const file = getImageFileFromClipboard(event.clipboardData);
   if (!file) {
+    setImageImportStatus('Clipboard không có ảnh. Hãy chụp/copy ảnh rồi nhấn Ctrl+V, hoặc chọn file ảnh.', true);
     return;
   }
   event.preventDefault();
@@ -2989,17 +3019,19 @@ function handleImageImportChange() {
 }
 
 function handleImageImportClear() {
+  currentImageImportFile = null;
   if (imageImportInput) imageImportInput.value = '';
   clearImagePreview();
   setImageImportStatus('');
 }
 
 function handleImageImportRerun() {
-  if (!imageImportInput || !imageImportInput.files || !imageImportInput.files[0]) {
+  const file = currentImageImportFile || imageImportInput?.files?.[0];
+  if (!file) {
     setImageImportStatus('Vui lòng chọn ảnh để chạy lại OCR.', true);
     return;
   }
-  processImageImport(imageImportInput.files[0]);
+  void processImageImport(file);
 }
 
 async function handleAIStep(stepKey) {
@@ -3123,14 +3155,21 @@ function bindEvents() {
     button.addEventListener('click', () => showPage(button.dataset.page));
   });
 
+  setEntryMode('quick');
+  entryModeQuickButton?.addEventListener('click', () => setEntryMode('quick'));
+  entryModeDetailButton?.addEventListener('click', () => setEntryMode('detail'));
+  quickAddDetailsButton?.addEventListener('click', () => setEntryMode('detail'));
+
   addForm.addEventListener('submit', async (event) => {
     event.preventDefault();
+    const isQuickMode = addForm.dataset.entryMode === 'quick';
     const wasEditing = Boolean(editingWord);
     const word = inputWord?.value?.trim() || '';
     const englishDefinition = inputMeaning?.value?.trim() || '';
     const vietnameseMeaning = inputVietnameseMeaning?.value?.trim() || '';
     const partOfSpeech = inputPartOfSpeech?.value?.trim() || '';
-    const existingMeanings = (editingWord ? vocabulary.find((item) => normalizeWordKey(item.word) === normalizeWordKey(editingWord)) : null)?.meanings || {};
+    const existingEntry = editingWord ? vocabulary.find((item) => normalizeWordKey(item.word) === normalizeWordKey(editingWord)) : null;
+    const existingMeanings = existingEntry?.meanings || {};
     let meanings = buildMeaningMap(existingMeanings, 'english', englishDefinition);
     meanings = buildMeaningMap(meanings, 'vietnamese', vietnameseMeaning);
     let ipa = inputIpa?.value?.trim() || '';
@@ -3154,13 +3193,18 @@ function bindEvents() {
     const enrichedSynonyms = needsSupportEnrichment(synonyms) ? await enrichSupportEntriesWithMeanings(synonyms) : synonyms;
     const enrichedAntonyms = needsSupportEnrichment(antonyms) ? await enrichSupportEntriesWithMeanings(antonyms) : antonyms;
     const example = inputExample?.value?.trim() || '';
-    const examples = { basic: example };
+    const existingExamples = existingEntry?.examples && typeof existingEntry.examples === 'object' && !Array.isArray(existingEntry.examples)
+      ? existingEntry.examples
+      : {};
+    const examples = { ...existingExamples, basic: example };
     const meaningsAnalysis = currentMeaningsAnalysis;
     let topic = inputTopic.value;
     let subTopic = inputSubtopic.value;
-    let type = inputType?.value || DEFAULT_TYPE;
+    let type = isQuickMode && !wasEditing
+      ? (/\s/.test(word) ? 'Phrase' : DEFAULT_TYPE)
+      : inputType?.value || existingEntry?.type || DEFAULT_TYPE;
 
-    if (!word || !englishDefinition) {
+    if (!word || (!isQuickMode && !englishDefinition)) {
       addFeedback.textContent = 'Vui lòng nhập đủ thông tin.';
       return;
     }
@@ -3188,7 +3232,7 @@ function bindEvents() {
       subTopic = newSubTopic;
     }
 
-    if (!ipa) {
+    if (!isQuickMode && !ipa) {
       ipa = await fetchWordIpa(word);
     }
 
@@ -3225,19 +3269,27 @@ function bindEvents() {
         meaningsAnalysis,
       };
       console.log('DATA FLOW - Before Save Submission Payload:', submissionPayload);
+      let savedEntry;
       if (editingWord) {
-          await updateVocabularyEntryByWord(editingWord, submissionPayload);
+          savedEntry = await updateVocabularyEntryByWord(editingWord, submissionPayload);
       } else {
-          await addVocabularyEntry(submissionPayload);
+          savedEntry = await addVocabularyEntry(submissionPayload);
+      }
+      if (!savedEntry || normalizeWordKey(savedEntry.word) !== normalizeWordKey(word)) {
+        throw new Error('Không nhận được xác nhận lưu từ.');
       }
 
       resetAddForm();
-      addFeedback.textContent = wasEditing ? 'Cập nhật thành công.' : 'Lưu từ thành công.';
+      addFeedback.textContent = wasEditing
+        ? 'Cập nhật thành công.'
+        : isQuickMode ? 'Đã lưu. Nhập từ tiếp theo.' : 'Lưu từ thành công.';
       refreshFilterControls();
       renderWordList();
       renderLearnSelection();
       renderTestState();
-      if (!wasEditing) {
+      if (isQuickMode) {
+        inputWord?.focus({ preventScroll: true });
+      } else if (!wasEditing) {
         addForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
         inputWord?.focus({ preventScroll: true });
       }
@@ -3365,7 +3417,6 @@ function bindEvents() {
   inputSubtopic.addEventListener('focus', () => {
     inputSubtopic.dataset.previousValue = inputSubtopic.value;
   });
-
   inputSubtopic.addEventListener('change', async () => {
     updateDuplicateStatus();
     if (inputSubtopic.value === ADD_SUBTOPIC_VALUE) {
@@ -3385,6 +3436,7 @@ function bindEvents() {
   inputModeManual?.addEventListener('change', () => {
     updateImageImportVisibility();
     if (imageImportPanel) {
+      currentImageImportFile = null;
       setImageImportStatus('');
       clearImagePreview();
       imageImportInput.value = '';
@@ -3406,7 +3458,7 @@ function bindEvents() {
 
   document.addEventListener('paste', (event) => {
     void handleImagePaste(event);
-  });
+  }, true);
 
   document.getElementById('rename-topic')?.addEventListener('click', async () => {
     const topicName = getActiveTopicValue();

@@ -321,6 +321,7 @@ function normalizeVocabularyEntry(entry = {}, language = activeLanguage) {
     '',
   ).trim();
   const examples = {
+    ...legacyExamples,
     basic: exampleValue,
   };
   return {
@@ -374,6 +375,10 @@ function updateDerivedCaches(words, language = activeLanguage) {
 
 export function toFirestorePayload(entry) {
   const exampleValue = String(entry.example || entry.examples?.basic || entry.basicExample || '').trim();
+  const examples = entry.examples && typeof entry.examples === 'object' && !Array.isArray(entry.examples) ? entry.examples : {};
+  const additionalExamples = Object.fromEntries(
+    Object.entries(examples).filter(([key, value]) => key !== 'basic' && typeof value === 'string' && value.trim()),
+  );
   const payload = {
     word: entry.word,
     meanings: normalizeMeaningMap(entry.meanings || entry.meaning),
@@ -388,7 +393,7 @@ export function toFirestorePayload(entry) {
     commonExpressions: normalizeSupportObjectList(entry.commonExpressions),
     commonMistakes: normalizeSupportObjectList(entry.commonMistakes),
     meaningsAnalysis: normalizeMeaningsAnalysis(entry.meaningsAnalysis),
-    examples: entry.examples && typeof entry.examples === 'object' ? { basic: String(entry.examples.basic || entry.example || '').trim() } : { basic: exampleValue },
+    examples: { ...additionalExamples, basic: String(examples.basic || entry.example || '').trim() || exampleValue },
     collocations: normalizeSupportObjectList(entry.collocations),
     topic: entry.topic,
     subTopic: entry.subTopic,
@@ -1217,7 +1222,18 @@ export async function updateVocabularyEntryByWord(originalWord, updates) {
     return null;
   }
 
-  const merged = { ...existing, ...updates, word: nextWord || existing.word };
+  const existingExamples = existing.examples && typeof existing.examples === 'object' && !Array.isArray(existing.examples)
+    ? existing.examples
+    : {};
+  const updatedExamples = updates?.examples && typeof updates.examples === 'object' && !Array.isArray(updates.examples)
+    ? updates.examples
+    : {};
+  const merged = {
+    ...existing,
+    ...updates,
+    examples: { ...existingExamples, ...updatedExamples },
+    word: nextWord || existing.word,
+  };
   console.log('DATA FLOW - Before updateVocabularyEntryByWord normalize:', merged);
   const updated = normalizeVocabularyEntry(merged, activeLanguage);
   console.log('DATA FLOW - After updateVocabularyEntryByWord normalize:', updated);

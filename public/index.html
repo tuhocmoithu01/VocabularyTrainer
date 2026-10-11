@@ -70,12 +70,13 @@
               </div>
             </div>
             <div id="image-import-panel" class="field-card hidden">
-              <div class="image-import-instructions">OCR dùng API của ứng dụng khi có kết nối mạng.</div>
+              <div class="image-import-instructions">Ảnh sẽ được gửi tới Gemini để nhận diện từ vựng.</div>
               <label>
                 <span>Chọn ảnh</span>
                 <input type="file" id="image-import-input" accept="image/*" />
               </label>
               <div id="image-import-instructions" class="image-import-instructions">Hoặc Paste Image (Ctrl+V) khi đang ở chế độ Từ hình ảnh.</div>
+              <div id="image-import-status" class="feedback image-import-status" aria-live="polite"></div>
               <div id="image-import-preview" class="image-import-preview hidden">
                 <img id="image-import-preview-img" alt="Preview ảnh" />
                 <div class="image-import-actions">
@@ -83,7 +84,6 @@
                   <button type="button" id="image-import-rerun" class="secondary-button">OCR lại</button>
                   <button type="button" id="image-import-clear" class="secondary-button">Xóa ảnh</button>
                 </div>
-                <div id="image-import-status" class="feedback image-import-status" aria-live="polite"></div>
               </div>
             </div>
             <label>
@@ -452,7 +452,7 @@
       });
     });
 
-    import('./app.js?v=20261006-2');
+    import('./app.js?v=20261008-1');
   </script>
 </body>
 </html>

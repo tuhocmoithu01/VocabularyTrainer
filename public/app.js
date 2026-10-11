@@ -177,6 +177,7 @@ const imageImportStatus = document.getElementById('image-import-status');
 const imageImportChange = document.getElementById('image-import-change');
 const imageImportRerun = document.getElementById('image-import-rerun');
 const imageImportClear = document.getElementById('image-import-clear');
+let currentImageImportFile = null;
 
 // ===== SOUND SETTINGS =====
 const SOUND_ENABLED_KEY = 'soundEnabled';
@@ -2893,6 +2894,7 @@ async function processImageImport(file) {
     setImageImportStatus('Vui lòng chọn ảnh để import.', true);
     return;
   }
+  currentImageImportFile = file;
   try {
     const parsed = await runOCRFile(file);
     setImageImportStatus('✅ OCR thành công. Đang tự động mở rộng AI...');
@@ -2903,20 +2905,33 @@ async function processImageImport(file) {
   }
 }
 
+function getImageFileFromClipboard(clipboardData) {
+  const files = Array.from(clipboardData?.files || []);
+  const imageFile = files.find((file) => file.type.startsWith('image/'));
+  if (imageFile) {
+    return imageFile;
+  }
+
+  const items = Array.from(clipboardData?.items || []);
+  for (const item of items) {
+    if (item.kind !== 'file' && !item.type.startsWith('image/')) {
+      continue;
+    }
+    const file = item.getAsFile();
+    if (file?.type.startsWith('image/')) {
+      return file;
+    }
+  }
+  return null;
+}
+
 async function handleImagePaste(event) {
   if (!inputModeImage?.checked) {
     return;
   }
-  const items = event.clipboardData?.items;
-  if (!items) {
-    return;
-  }
-  const imageItem = Array.from(items).find((item) => item.type.startsWith('image/'));
-  if (!imageItem) {
-    return;
-  }
-  const file = imageItem.getAsFile();
+  const file = getImageFileFromClipboard(event.clipboardData);
   if (!file) {
+    setImageImportStatus('Clipboard không có ảnh. Hãy chụp/copy ảnh rồi nhấn Ctrl+V, hoặc chọn file ảnh.', true);
     return;
   }
   event.preventDefault();
@@ -2942,17 +2957,19 @@ function handleImageImportChange() {
 }
 
 function handleImageImportClear() {
+  currentImageImportFile = null;
   if (imageImportInput) imageImportInput.value = '';
   clearImagePreview();
   setImageImportStatus('');
 }
 
 function handleImageImportRerun() {
-  if (!imageImportInput || !imageImportInput.files || !imageImportInput.files[0]) {
+  const file = currentImageImportFile || imageImportInput?.files?.[0];
+  if (!file) {
     setImageImportStatus('Vui lòng chọn ảnh để chạy lại OCR.', true);
     return;
   }
-  processImageImport(imageImportInput.files[0]);
+  void processImageImport(file);
 }
 
 async function handleAIStep(stepKey) {
@@ -3338,6 +3355,7 @@ function bindEvents() {
   inputModeManual?.addEventListener('change', () => {
     updateImageImportVisibility();
     if (imageImportPanel) {
+      currentImageImportFile = null;
       setImageImportStatus('');
       clearImagePreview();
       imageImportInput.value = '';
@@ -3359,7 +3377,7 @@ function bindEvents() {
 
   document.addEventListener('paste', (event) => {
     void handleImagePaste(event);
-  });
+  }, true);
 
   document.getElementById('rename-topic')?.addEventListener('click', async () => {
     const topicName = getActiveTopicValue();

@@ -29,17 +29,10 @@ function readLocalGeminiConfig() {
   }
 }
 
-function isOAuthToken(key) {
-  return typeof key === 'string' && /^(AQ\.|ya29\.|ya29_)/.test(key);
-}
-
 function validateGeminiConfig(config) {
   if (config.missing) return 'Gemini API key chưa được cấu hình trong api_gemini.js';
   if (!config.apiKey || !String(config.apiKey).trim()) {
     return 'Gemini API key chưa được cấu hình trong api_gemini.js';
-  }
-  if (isOAuthToken(config.apiKey)) {
-    return 'Giá trị trong api_gemini.js là OAuth token, không phải Gemini API key. Hãy dùng Gemini API key từ Google AI Studio.';
   }
   if (!config.authType || String(config.authType).trim() !== 'API_KEY') {
     return 'Gemini authType phải là API_KEY trong api_gemini.js';
