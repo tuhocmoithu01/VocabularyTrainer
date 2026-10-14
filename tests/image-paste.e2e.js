@@ -63,9 +63,9 @@ const [serviceWorkerSource, mainHtml, publicHtml] = await Promise.all([
   readFile(path.join(ROOT, 'index.html'), 'utf8'),
   readFile(path.join(ROOT, 'public', 'index.html'), 'utf8'),
 ]);
-assert.match(serviceWorkerSource, /vocabulary-trainer-static-v12/);
+assert.match(serviceWorkerSource, /vocabulary-trainer-static-v14/);
 for (const html of [mainHtml, publicHtml]) {
-  assert.match(html, /app\.js\?v=20261008-1/);
+  assert.match(html, /app\.js\?v=20261014-3/);
 }
 
 const server = await startStaticServer();

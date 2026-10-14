@@ -87,6 +87,25 @@ const ALL_FILTER_VALUE = '';
 const pageButtons = document.querySelectorAll('.menu-button');
 const pages = document.querySelectorAll('.page');
 const addForm = document.getElementById('add-form');
+const entryModeQuickButton = document.getElementById('entry-mode-quick');
+const entryModeDetailButton = document.getElementById('entry-mode-detail');
+const entryModeFileButton = document.getElementById('entry-mode-file');
+const quickAddDetailsButton = document.getElementById('quick-add-details');
+const fileImportPanel = document.getElementById('file-import-panel');
+const fileImportInput = document.getElementById('file-import-input');
+const fileImportDropzone = document.getElementById('file-import-dropzone');
+const fileImportChooseButton = document.getElementById('file-import-choose');
+const fileImportMeta = document.getElementById('file-import-meta');
+const fileImportName = document.getElementById('file-import-name');
+const fileImportFormat = document.getElementById('file-import-format');
+const fileImportLines = document.getElementById('file-import-lines');
+const fileImportPreviewWrap = document.getElementById('file-import-preview-wrap');
+const fileImportPreviewBody = document.getElementById('file-import-preview-body');
+const fileImportValidateButton = document.getElementById('file-import-validate');
+const fileImportSubmitButton = document.getElementById('file-import-submit');
+const fileImportCancelButton = document.getElementById('file-import-cancel');
+const fileImportResetButton = document.getElementById('file-import-reset');
+const fileImportFeedback = document.getElementById('file-import-feedback');
 const inputTopic = document.getElementById('input-topic');
 const inputSubtopic = document.getElementById('input-subtopic');
 const inputType = document.getElementById('input-type');
@@ -166,6 +185,8 @@ const dictationModeSelect = document.getElementById('dictation-mode-select');
 const soundToggle = document.getElementById('sound-toggle');
 const languageSelect = document.getElementById('language-select');
 const languageLabel = document.getElementById('language-label');
+const connectionStatus = document.querySelector('.connection-status');
+const connectionStatusLabel = document.getElementById('connection-status');
 const meaningLanguageSelect = document.getElementById('meaning-language-select');
 const inputModeManual = document.getElementById('input-mode-manual');
 const inputModeImage = document.getElementById('input-mode-image');
@@ -237,6 +258,7 @@ let currentSupportAntonyms = [];
 let currentSupportWordFamily = [];
 let currentSupportFixedPhrases = [];
 let currentSupportCollocations = [];
+let currentImportedFile = null;
 let currentSupportSentencePatterns = [];
 let currentSupportCommonExpressions = [];
 let currentSupportCommonMistakes = [];
@@ -367,6 +389,44 @@ function showPage(pageName) {
   pageButtons.forEach((button) => button.classList.toggle('active', button.dataset.page === pageName));
 }
 
+function setConnectionStatus(status) {
+  if (!connectionStatus || !connectionStatusLabel) {
+    return;
+  }
+
+  connectionStatus.dataset.status = status.toLowerCase();
+  connectionStatusLabel.textContent = status;
+}
+
+function initializeConnectionStatus() {
+  const requiredCollections = ['vocabulary', 'preferences'];
+  const serverSyncedCollections = new Set();
+  setConnectionStatus(navigator.onLine ? 'Syncing' : 'Offline');
+
+  window.addEventListener('offline', () => {
+    serverSyncedCollections.clear();
+    setConnectionStatus('Offline');
+  });
+  window.addEventListener('online', () => {
+    serverSyncedCollections.clear();
+    setConnectionStatus('Syncing');
+  });
+  window.addEventListener('language-changed', () => {
+    serverSyncedCollections.clear();
+    setConnectionStatus(navigator.onLine ? 'Syncing' : 'Offline');
+  });
+  window.addEventListener('firestore-snapshot-status', (event) => {
+    if (!navigator.onLine || event.detail?.fromCache) {
+      return;
+    }
+
+    serverSyncedCollections.add(event.detail.collection);
+    if (requiredCollections.every((collection) => serverSyncedCollections.has(collection))) {
+      setConnectionStatus('Online');
+    }
+  });
+}
+
 function clearAddFormInputFields() {
   if (inputWord) inputWord.value = '';
   if (inputPartOfSpeech) inputPartOfSpeech.value = '';
@@ -404,6 +464,590 @@ function resetAddForm() {
   addSubmitButton.textContent = 'Lưu từ';
   addSubmitButton.disabled = false;
   addCancelButton.classList.add('hidden');
+}
+
+function setEntryMode(mode) {
+  const isQuickMode = mode === 'quick';
+  const isDetailMode = mode === 'detail';
+  const isFileMode = mode === 'file';
+  addForm.dataset.entryMode = mode;
+  addForm.querySelectorAll('.entry-mode-detail-only').forEach((element) => {
+    element.classList.toggle('hidden', !isDetailMode);
+  });
+  addForm.querySelectorAll('.entry-mode-quick-only').forEach((element) => {
+    element.classList.toggle('hidden', !isQuickMode);
+  });
+  addForm.querySelectorAll('.entry-mode-file-only').forEach((element) => {
+    element.classList.toggle('hidden', !isFileMode);
+  });
+  inputMeaning.required = isDetailMode;
+  entryModeQuickButton?.setAttribute('aria-pressed', String(isQuickMode));
+  entryModeDetailButton?.setAttribute('aria-pressed', String(isDetailMode));
+  entryModeFileButton?.setAttribute('aria-pressed', String(isFileMode));
+}
+
+function normalizeImportedValue(value) {
+  return String(value ?? '').replace(/\uFEFF/g, '').replace(/\r/g, '').trim();
+}
+
+function normalizeImportedHeader(label) {
+  return normalizeImportedValue(label)
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function parseDelimitedRow(line, delimiter) {
+  const result = [];
+  let current = '';
+  let inQuotes = false;
+
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index];
+    const nextCharacter = line[index + 1];
+
+    if (character === '"') {
+      if (inQuotes && nextCharacter === '"') {
+        current += '"';
+        index += 1;
+      } else {
+        inQuotes = !inQuotes;
+      }
+      continue;
+    }
+
+    if (character === delimiter && !inQuotes) {
+      result.push(current.trim());
+      current = '';
+      continue;
+    }
+
+    current += character;
+  }
+
+  result.push(current.trim());
+  return result;
+}
+
+function detectBestDelimiter(text) {
+  const sampleLines = text.split(/\r?\n/).filter((line) => line.trim()).slice(0, 8);
+  const delimiterCandidates = [';','\t','|',','];
+  let bestDelimiter = ',';
+  let bestScore = -Infinity;
+
+  delimiterCandidates.forEach((delimiter) => {
+    const scores = sampleLines.map((line) => {
+      const pieces = parseDelimitedRow(line, delimiter);
+      return pieces.length > 1 ? pieces.length : 0;
+    });
+    const total = scores.reduce((sum, value) => sum + value, 0);
+    if (total > bestScore) {
+      bestScore = total;
+      bestDelimiter = delimiter;
+    }
+  });
+
+  return bestDelimiter;
+}
+
+function detectHeaderMap(headerRow = []) {
+  const normalizedHeaders = headerRow.map((cell) => normalizeImportedHeader(cell));
+  const aliasMap = {
+    word: ['word', 'vocabulary', 'term', 'english', 'english word', 'phrase', 'english term'],
+    meaning: ['vietnamese meaning', 'vietnamese', 'meaning', 'translation', 'nghia', 'nghia tieng viet', 'meanings'],
+    topic: ['topic'],
+    subtopic: ['sub topic', 'subtopic', 'subcategory'],
+  };
+
+  const matched = {
+    word: -1,
+    meaning: -1,
+    topic: -1,
+    subtopic: -1,
+  };
+
+  normalizedHeaders.forEach((header, index) => {
+    Object.entries(aliasMap).forEach(([key, aliases]) => {
+      if (matched[key] === -1 && aliases.includes(header)) {
+        matched[key] = index;
+      }
+    });
+  });
+
+  return matched;
+}
+
+function buildImportedRowObject(row, headerMap, fallbackIndex = 0) {
+  const getCell = (key) => {
+    const index = headerMap[key];
+    if (index >= 0 && index < row.length) {
+      return normalizeImportedValue(row[index]);
+    }
+    return '';
+  };
+
+  const wordValue = getCell('word') || normalizeImportedValue(row[fallbackIndex] || '');
+  const meaningValue = getCell('meaning') || '';
+  const topicValue = getCell('topic') || '';
+  const subTopicValue = getCell('subtopic') || '';
+
+  return {
+    word: wordValue,
+    meaning: meaningValue,
+    topic: topicValue,
+    subTopic: subTopicValue,
+  };
+}
+
+function parseImportedRowsFromArray(rows) {
+  if (!Array.isArray(rows) || !rows.length) {
+    return [];
+  }
+
+  const sanitizedRows = rows
+    .map((row) => Array.isArray(row) ? row.map((cell) => normalizeImportedValue(cell)) : [normalizeImportedValue(row)])
+    .filter((row) => row.some((cell) => cell.length > 0));
+
+  if (!sanitizedRows.length) {
+    return [];
+  }
+
+  const headerMap = detectHeaderMap(sanitizedRows[0]);
+  const hasHeader = Object.values(headerMap).some((index) => index >= 0);
+  const startIndex = hasHeader ? 1 : 0;
+  const output = [];
+
+  for (let index = startIndex; index < sanitizedRows.length; index += 1) {
+    const row = sanitizedRows[index];
+    const isEmptyRow = row.every((cell) => !cell);
+    if (isEmptyRow) {
+      continue;
+    }
+
+    if (hasHeader) {
+      const record = buildImportedRowObject(row, headerMap);
+      if (record.word || record.meaning) {
+        output.push(record);
+      }
+      continue;
+    }
+
+    if (row.length === 1) {
+      output.push({ word: row[0], meaning: '', topic: '', subTopic: '' });
+      continue;
+    }
+
+    const primaryWord = normalizeImportedValue(row[0]);
+    const secondaryWord = normalizeImportedValue(row[1]);
+    const wordToken = primaryWord || secondaryWord || '';
+    const meaningToken = row.length > 1 ? secondaryWord : '';
+    const topicToken = row.length > 2 ? normalizeImportedValue(row[2]) : '';
+    const subTopicToken = row.length > 3 ? normalizeImportedValue(row[3]) : '';
+    output.push({ word: wordToken, meaning: meaningToken, topic: topicToken, subTopic: subTopicToken });
+  }
+
+  return output
+    .map((record) => ({
+      word: String(record.word || '').replace(/\s+/g, ' ').trim(),
+      meaning: String(record.meaning || '').replace(/\s+/g, ' ').trim(),
+      topic: String(record.topic || '').replace(/\s+/g, ' ').trim(),
+      subTopic: String(record.subTopic || '').replace(/\s+/g, ' ').trim(),
+    }))
+    .filter((record) => record.word || record.meaning);
+}
+
+function parseTextImportRows(fileText, fileName) {
+  const normalizedName = String(fileName || '').toLowerCase();
+  const lines = fileText.split(/\r?\n/).map((line) => normalizeImportedValue(line)).filter((line) => line.length > 0);
+
+  if (!lines.length) {
+    return [];
+  }
+
+  const rowsAsCells = lines.map((line) => {
+    if (line.includes('\t')) {
+      return parseDelimitedRow(line, '\t');
+    }
+    return [line];
+  });
+
+  if (normalizedName.endsWith('.csv') || normalizedName.endsWith('.txt')) {
+    const delimiter = detectBestDelimiter(fileText);
+    if (normalizedName.endsWith('.txt') && ![';', '\t', '|', ','].includes(delimiter)) {
+      return rowsAsCells.map(([word]) => ({ word, meaning: '', topic: '', subTopic: '' }));
+    }
+
+    const tokens = lines.map((line) => parseDelimitedRow(line, delimiter));
+    const parsedRows = parseImportedRowsFromArray(tokens);
+    if (parsedRows.length > 0) {
+      return parsedRows;
+    }
+
+    return lines.map((line) => {
+      const parts = line.includes('\t') ? parseDelimitedRow(line, '\t') : [line];
+      const separatorIndex = line.search(/\s*\|\s*|\s*\t\s*|\s*;\s*|\s*,\s*/);
+      if (separatorIndex > 0 && parts.length > 1) {
+        const [wordPart, ...meaningParts] = parts;
+        return { word: wordPart, meaning: meaningParts.join(' '), topic: '', subTopic: '' };
+      }
+      return { word: parts[0], meaning: '', topic: '', subTopic: '' };
+    });
+  }
+
+  return parseImportedRowsFromArray(rowsAsCells);
+}
+
+function stripRtfMarkup(value) {
+  if (!value) {
+    return '';
+  }
+
+  return value
+    .replace(/\\par[d]?/gi, '\n')
+    .replace(/\\tab/gi, '\t')
+    .replace(/\\'([0-9a-fA-F]{2})/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)))
+    .replace(/\\([a-zA-Z0-9]+)-?([0-9]{1,4})?/g, ' ')
+    .replace(/[{}]/g, '')
+    .replace(/\s+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function getWordXmlElements(node, localName) {
+  return [...node.getElementsByTagNameNS('*', localName)];
+}
+
+function extractWordXmlText(node) {
+  if (node.localName === 't') {
+    return node.textContent || '';
+  }
+  if (node.localName === 'tab' || node.localName === 'br' || node.localName === 'cr') {
+    return ' ';
+  }
+
+  return [...node.childNodes].map(extractWordXmlText).join('');
+}
+
+function extractWordCellText(cell) {
+  const paragraphs = getWordXmlElements(cell, 'p');
+  const paragraphTexts = paragraphs
+    .map((paragraph) => extractWordXmlText(paragraph).replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+
+  return (paragraphTexts.length ? paragraphTexts.join(' ') : extractWordXmlText(cell))
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+async function extractDocxText(file) {
+  const jszipModule = await import('https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm');
+  const zip = await jszipModule.default.loadAsync(await file.arrayBuffer());
+  const contentXml = await zip.file('word/document.xml')?.async('string');
+  if (!contentXml) {
+    throw new Error('File Word không chứa nội dung document.xml.');
+  }
+
+  const document = new DOMParser().parseFromString(contentXml, 'application/xml');
+  if (document.getElementsByTagName('parsererror').length > 0) {
+    throw new Error('Nội dung XML trong file Word không hợp lệ.');
+  }
+
+  const rows = getWordXmlElements(document, 'tr');
+  if (rows.length) {
+    return rows
+      .map((row) => [...row.children]
+        .filter((child) => child.localName === 'tc')
+        .map(extractWordCellText)
+        .join('\t'))
+      .filter((row) => row.replace(/\t/g, '').trim().length > 0)
+      .join('\n');
+  }
+
+  return getWordXmlElements(document, 'p')
+    .map((paragraph) => extractWordXmlText(paragraph).replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .join('\n');
+}
+
+async function extractOdtText(file) {
+  const jszipModule = await import('https://cdn.jsdelivr.net/npm/jszip@3.10.1/+esm');
+  const zip = await jszipModule.default.loadAsync(await file.arrayBuffer());
+  const contentXml = await zip.file('content.xml')?.async('string');
+  if (!contentXml) {
+    return '';
+  }
+
+  return contentXml
+    .replace(/<text:p[^>]*>/gi, '\n')
+    .replace(/<\/text:p>/gi, '\n')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+async function readFileEntries(file) {
+  if (!file) {
+    throw new Error('Chưa có file nào được chọn.');
+  }
+
+  const extension = String(file.name || '').split('.').pop()?.toLowerCase() || '';
+
+  if (extension === 'xlsx' || extension === 'xls') {
+    try {
+      const XLSX = await import('https://cdn.jsdelivr.net/npm/xlsx@0.18.5/+esm');
+      const arrayBuffer = await file.arrayBuffer();
+      const workbook = XLSX.read(new Uint8Array(arrayBuffer), { type: 'array' });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, blankrows: false, defval: '' });
+      return parseImportedRowsFromArray(rows);
+    } catch (error) {
+      console.error('Failed to parse xlsx file', error);
+      throw new Error('Không thể đọc file Excel. Vui lòng kiểm tra định dạng .xlsx hoặc .xls.');
+    }
+  }
+
+  if (extension === 'docx') {
+    try {
+      const fileText = await extractDocxText(file);
+      return parseTextImportRows(fileText, file.name);
+    } catch (error) {
+      console.error('Failed to parse docx file', error);
+      const reason = error instanceof Error ? error.message : String(error);
+      throw new Error(`Không thể đọc file Word (.docx): ${reason}`);
+    }
+  }
+
+  if (extension === 'rtf') {
+    const fileText = await file.text();
+    return parseTextImportRows(stripRtfMarkup(fileText), file.name);
+  }
+
+  if (extension === 'odt') {
+    try {
+      const fileText = await extractOdtText(file);
+      return parseTextImportRows(fileText, file.name);
+    } catch (error) {
+      console.error('Failed to parse odt file', error);
+      throw new Error('Không thể đọc file OpenDocument (.odt).');
+    }
+  }
+
+  if (extension === 'csv' || extension === 'txt' || extension === 'md' || extension === 'log') {
+    const fileText = await file.text();
+    return parseTextImportRows(fileText, file.name);
+  }
+
+  throw new Error('Định dạng file không được hỗ trợ. Chỉ chấp nhận .csv, .txt, .md, .log, .docx, .rtf, .odt, .xlsx và .xls.');
+}
+
+function resetImportedFileState(message = '') {
+  currentImportedFile = null;
+  if (fileImportInput) {
+    fileImportInput.value = '';
+  }
+  if (fileImportMeta) {
+    fileImportMeta.classList.add('hidden');
+  }
+  if (fileImportPreviewWrap) {
+    fileImportPreviewWrap.classList.add('hidden');
+  }
+  if (fileImportPreviewBody) {
+    fileImportPreviewBody.innerHTML = '';
+  }
+  if (fileImportFeedback) {
+    fileImportFeedback.textContent = message;
+  }
+  if (fileImportValidateButton) fileImportValidateButton.disabled = true;
+  if (fileImportSubmitButton) fileImportSubmitButton.disabled = true;
+  if (fileImportName) fileImportName.textContent = '—';
+  if (fileImportFormat) fileImportFormat.textContent = '—';
+  if (fileImportLines) fileImportLines.textContent = '0';
+  fileImportDropzone?.classList.remove('drag-over');
+}
+
+function getImportedFileStatusLabel(status) {
+  if (status === 'Hợp lệ') {
+    return '<span class="file-import-status-pill file-import-status-valid">Hợp lệ</span>';
+  }
+  if (status === 'Đã tồn tại trong bộ từ vựng' || status === 'Trùng lặp trong file' || status === 'Topic/Sub Topic không hợp lệ' || status === 'Thiếu từ/cụm từ') {
+    return '<span class="file-import-status-pill file-import-status-error">' + status + '</span>';
+  }
+  return '<span class="file-import-status-pill file-import-status-warning">' + status + '</span>';
+}
+
+function buildImportedPreviewRows(rows, validationRows = []) {
+  if (!rows.length) {
+    fileImportPreviewBody.innerHTML = '<tr><td colspan="6">Không có dữ liệu hợp lệ để xem trước.</td></tr>';
+    return;
+  }
+
+  const statusMap = new Map(validationRows.map((row) => [normalizeWordKey(row.word || row.originalWord || ''), row.status]));
+  fileImportPreviewBody.innerHTML = rows
+    .map((row, index) => {
+      const rowStatus = statusMap.get(normalizeWordKey(row.word || '')) || 'Hợp lệ';
+      return `
+        <tr>
+          <td>${index + 1}</td>
+          <td>${row.word || '—'}</td>
+          <td>${row.meaning || '—'}</td>
+          <td>${row.topic || inputTopic?.value || '—'}</td>
+          <td>${row.subTopic || inputSubtopic?.value || '—'}</td>
+          <td>${getImportedFileStatusLabel(rowStatus)}</td>
+        </tr>
+      `;
+    })
+    .join('');
+}
+
+function validateImportedRows(rows) {
+  const vocabularyEntries = getVocabularySnapshot();
+  const existingKeys = new Set(vocabularyEntries.map((entry) => normalizeWordKey(entry.word)));
+  const seenInFile = new Set();
+  const validRows = [];
+
+  return rows.map((row, index) => {
+    const word = String(row.word || '').trim();
+    const meaning = String(row.meaning || '').trim();
+    const topic = String(row.topic || inputTopic?.value || '').trim() || DEFAULT_TOPIC;
+    const subTopic = String(row.subTopic || inputSubtopic?.value || '').trim() || DEFAULT_SUBTOPIC;
+    let status = 'Hợp lệ';
+
+    if (!word) {
+      status = 'Thiếu từ/cụm từ';
+    } else if (seenInFile.has(normalizeWordKey(word))) {
+      status = 'Trùng lặp trong file';
+    } else if (existingKeys.has(normalizeWordKey(word))) {
+      status = 'Đã tồn tại trong bộ từ vựng';
+    } else if (!topic || !subTopic) {
+      status = 'Topic/Sub Topic không hợp lệ';
+    }
+
+    if (status === 'Hợp lệ') {
+      seenInFile.add(normalizeWordKey(word));
+      validRows.push({
+        index,
+        word,
+        meaning,
+        topic,
+        subTopic,
+      });
+    }
+
+    return {
+      index,
+      word,
+      meaning,
+      topic,
+      subTopic,
+      status,
+      valid: status === 'Hợp lệ',
+    };
+  });
+}
+
+function renderImportedPreview(rows, validationRows = []) {
+  const previewRows = rows.map((row, index) => ({
+    ...row,
+    index: index + 1,
+    topic: row.topic || inputTopic?.value || DEFAULT_TOPIC,
+    subTopic: row.subTopic || inputSubtopic?.value || DEFAULT_SUBTOPIC,
+  }));
+
+  if (!previewRows.length) {
+    fileImportPreviewWrap.classList.add('hidden');
+    fileImportPreviewBody.innerHTML = '';
+    return;
+  }
+
+  fileImportPreviewWrap.classList.remove('hidden');
+  buildImportedPreviewRows(previewRows, validationRows);
+}
+
+async function handleFileImportSelection(file) {
+  if (!file) {
+    return;
+  }
+
+  currentImportedFile = file;
+
+  try {
+    const extension = String(file.name || '').split('.').pop()?.toLowerCase() || '';
+    resetImportedFileState('Đang đọc file...');
+    currentImportedFile = file;
+    const rows = await readFileEntries(file);
+    const validationRows = validateImportedRows(rows);
+    const validCount = validationRows.filter((row) => row.valid).length;
+
+    fileImportMeta.classList.remove('hidden');
+    fileImportName.textContent = file.name;
+    fileImportFormat.textContent = extension ? `.${extension}` : 'Không xác định';
+    fileImportLines.textContent = String(rows.length);
+    renderImportedPreview(rows, validationRows);
+    fileImportValidateButton.disabled = false;
+    fileImportSubmitButton.disabled = validCount === 0;
+    fileImportFeedback.textContent = validCount > 0
+      ? `✅ Đã đọc ${rows.length} dòng. ${validCount} mục hợp lệ để nhập.`
+      : '⚠️ Không có dòng nào hợp lệ để nhập.';
+  } catch (error) {
+    resetImportedFileState();
+    fileImportFeedback.textContent = error?.message || 'Không thể đọc file này.';
+  }
+}
+
+async function importFileEntries() {
+  if (!currentImportedFile) {
+    fileImportFeedback.textContent = 'Vui lòng chọn file trước khi nhập.';
+    return;
+  }
+
+  try {
+    const rows = await readFileEntries(currentImportedFile);
+    const validationRows = validateImportedRows(rows);
+    const validEntries = validationRows.filter((row) => row.valid);
+
+    if (!validEntries.length) {
+      fileImportFeedback.textContent = 'Không có mục nào hợp lệ để nhập.';
+      return;
+    }
+
+    fileImportSubmitButton.disabled = true;
+    fileImportValidateButton.disabled = true;
+    fileImportFeedback.textContent = `⏳ Đang nhập ${validEntries.length} mục từ file...`;
+
+    let savedCount = 0;
+    for (const entry of validEntries) {
+      await addVocabularyEntry({
+        word: entry.word,
+        meaning: entry.meaning || '',
+        example: '',
+        ipa: '',
+        topic: entry.topic,
+        subTopic: entry.subTopic,
+        type: /\s/.test(entry.word) ? 'Phrase' : DEFAULT_TYPE,
+        meanings: buildMeaningMap({}, 'english', entry.meaning || ''),
+        partOfSpeech: '',
+        meaningsAnalysis: [],
+      });
+      savedCount += 1;
+    }
+
+    fileImportFeedback.textContent = `✅ Đã nhập ${savedCount} mục từ file vào bộ từ vựng.`;
+    refreshFilterControls();
+    renderWordList();
+    renderLearnSelection();
+    renderTestState();
+    resetImportedFileState('✅ Hoàn tất nhập dữ liệu từ file.');
+  } catch (error) {
+    console.error('Import file entries failed', error);
+    fileImportFeedback.textContent = error?.message || 'Không thể nhập dữ liệu từ file.';
+    fileImportSubmitButton.disabled = false;
+    fileImportValidateButton.disabled = false;
+  }
 }
 
 function buildSelectOptions(items, includeAll = false, includeAdd = false) {
@@ -2720,6 +3364,7 @@ function selectSuggestion() {
 }
 
 function startEditMode(entry) {
+  setEntryMode('detail');
   editingWord = entry.word;
   addSubmitButton.textContent = 'Cập nhật';
   addSubmitButton.disabled = false;
@@ -2876,6 +3521,10 @@ async function applyOCRResult(parsed) {
   }
 
   if (parsed.example) inputExample.value = parsed.example;
+  if (Array.isArray(parsed.wordFamily) && parsed.wordFamily.length) {
+    currentSupportWordFamily = mergeSupportLists(currentSupportWordFamily, parsed.wordFamily);
+    renderSupportEditorSections();
+  }
 
   console.log('DATA FLOW - Filled Form (after apply):', {
     word: inputWord?.value,
@@ -3093,14 +3742,93 @@ function bindEvents() {
     button.addEventListener('click', () => showPage(button.dataset.page));
   });
 
+  setEntryMode('quick');
+  entryModeQuickButton?.addEventListener('click', () => setEntryMode('quick'));
+  entryModeDetailButton?.addEventListener('click', () => setEntryMode('detail'));
+  entryModeFileButton?.addEventListener('click', () => setEntryMode('file'));
+  quickAddDetailsButton?.addEventListener('click', () => setEntryMode('detail'));
+
+  fileImportChooseButton?.addEventListener('click', (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    fileImportInput?.click();
+  });
+  fileImportResetButton?.addEventListener('click', () => resetImportedFileState('Chọn file để bắt đầu.'));
+  fileImportCancelButton?.addEventListener('click', () => {
+    resetImportedFileState('Đã hủy nhập từ file.');
+    setEntryMode('quick');
+  });
+  fileImportInput?.addEventListener('change', async (event) => {
+    const [selectedFile] = event.target.files || [];
+    await handleFileImportSelection(selectedFile);
+  });
+  fileImportDropzone?.addEventListener('click', (event) => {
+    if (event.target === fileImportInput) {
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    fileImportInput?.click();
+  });
+  fileImportDropzone?.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      event.stopPropagation();
+      fileImportInput?.click();
+    }
+  });
+  fileImportDropzone?.addEventListener('dragover', (event) => {
+    event.preventDefault();
+    fileImportDropzone.classList.add('drag-over');
+  });
+  fileImportDropzone?.addEventListener('dragleave', () => {
+    fileImportDropzone.classList.remove('drag-over');
+  });
+  fileImportDropzone?.addEventListener('drop', async (event) => {
+    event.preventDefault();
+    fileImportDropzone.classList.remove('drag-over');
+    const [selectedFile] = event.dataTransfer?.files || [];
+    if (selectedFile) {
+      await handleFileImportSelection(selectedFile);
+    }
+  });
+  fileImportValidateButton?.addEventListener('click', async () => {
+    if (!currentImportedFile) {
+      fileImportFeedback.textContent = 'Vui lòng chọn file trước khi kiểm tra dữ liệu.';
+      return;
+    }
+
+    try {
+      const rows = await readFileEntries(currentImportedFile);
+      const validationRows = validateImportedRows(rows);
+      const validCount = validationRows.filter((row) => row.valid).length;
+      renderImportedPreview(rows, validationRows);
+      fileImportSubmitButton.disabled = validCount === 0;
+      fileImportFeedback.textContent = validCount > 0
+        ? `✅ Đã kiểm tra ${rows.length} dòng. ${validCount} mục hợp lệ cho nhập.`
+        : '⚠️ Không có mục nào hợp lệ để nhập.';
+    } catch (error) {
+      fileImportFeedback.textContent = error?.message || 'Không thể kiểm tra dữ liệu file.';
+    }
+  });
+  fileImportSubmitButton?.addEventListener('click', async () => {
+    if (!currentImportedFile) {
+      fileImportFeedback.textContent = 'Vui lòng chọn file trước khi nhập.';
+      return;
+    }
+    await importFileEntries();
+  });
+
   addForm.addEventListener('submit', async (event) => {
     event.preventDefault();
+    const isQuickMode = addForm.dataset.entryMode === 'quick';
     const wasEditing = Boolean(editingWord);
     const word = inputWord?.value?.trim() || '';
     const englishDefinition = inputMeaning?.value?.trim() || '';
     const vietnameseMeaning = inputVietnameseMeaning?.value?.trim() || '';
     const partOfSpeech = inputPartOfSpeech?.value?.trim() || '';
-    const existingMeanings = (editingWord ? vocabulary.find((item) => normalizeWordKey(item.word) === normalizeWordKey(editingWord)) : null)?.meanings || {};
+    const existingEntry = editingWord ? vocabulary.find((item) => normalizeWordKey(item.word) === normalizeWordKey(editingWord)) : null;
+    const existingMeanings = existingEntry?.meanings || {};
     let meanings = buildMeaningMap(existingMeanings, 'english', englishDefinition);
     meanings = buildMeaningMap(meanings, 'vietnamese', vietnameseMeaning);
     let ipa = inputIpa?.value?.trim() || '';
@@ -3124,13 +3852,18 @@ function bindEvents() {
     const enrichedSynonyms = needsSupportEnrichment(synonyms) ? await enrichSupportEntriesWithMeanings(synonyms) : synonyms;
     const enrichedAntonyms = needsSupportEnrichment(antonyms) ? await enrichSupportEntriesWithMeanings(antonyms) : antonyms;
     const example = inputExample?.value?.trim() || '';
-    const examples = { basic: example };
+    const existingExamples = existingEntry?.examples && typeof existingEntry.examples === 'object' && !Array.isArray(existingEntry.examples)
+      ? existingEntry.examples
+      : {};
+    const examples = { ...existingExamples, basic: example };
     const meaningsAnalysis = currentMeaningsAnalysis;
     let topic = inputTopic.value;
     let subTopic = inputSubtopic.value;
-    let type = inputType?.value || DEFAULT_TYPE;
+    let type = isQuickMode && !wasEditing
+      ? (/\s/.test(word) ? 'Phrase' : DEFAULT_TYPE)
+      : inputType?.value || existingEntry?.type || DEFAULT_TYPE;
 
-    if (!word || !englishDefinition) {
+    if (!word || (!isQuickMode && !englishDefinition)) {
       addFeedback.textContent = 'Vui lòng nhập đủ thông tin.';
       return;
     }
@@ -3158,7 +3891,7 @@ function bindEvents() {
       subTopic = newSubTopic;
     }
 
-    if (!ipa) {
+    if (!isQuickMode && !ipa) {
       ipa = await fetchWordIpa(word);
     }
 
@@ -3195,19 +3928,27 @@ function bindEvents() {
         meaningsAnalysis,
       };
       console.log('DATA FLOW - Before Save Submission Payload:', submissionPayload);
+      let savedEntry;
       if (editingWord) {
-          await updateVocabularyEntryByWord(editingWord, submissionPayload);
+          savedEntry = await updateVocabularyEntryByWord(editingWord, submissionPayload);
       } else {
-          await addVocabularyEntry(submissionPayload);
+          savedEntry = await addVocabularyEntry(submissionPayload);
+      }
+      if (!savedEntry || normalizeWordKey(savedEntry.word) !== normalizeWordKey(word)) {
+        throw new Error('Không nhận được xác nhận lưu từ.');
       }
 
       resetAddForm();
-      addFeedback.textContent = wasEditing ? 'Cập nhật thành công.' : 'Lưu từ thành công.';
+      addFeedback.textContent = wasEditing
+        ? 'Cập nhật thành công.'
+        : isQuickMode ? 'Đã lưu. Nhập từ tiếp theo.' : 'Lưu từ thành công.';
       refreshFilterControls();
       renderWordList();
       renderLearnSelection();
       renderTestState();
-      if (!wasEditing) {
+      if (isQuickMode) {
+        inputWord?.focus({ preventScroll: true });
+      } else if (!wasEditing) {
         addForm.scrollIntoView({ behavior: 'smooth', block: 'start' });
         inputWord?.focus({ preventScroll: true });
       }
@@ -3335,7 +4076,6 @@ function bindEvents() {
   inputSubtopic.addEventListener('focus', () => {
     inputSubtopic.dataset.previousValue = inputSubtopic.value;
   });
-
   inputSubtopic.addEventListener('change', async () => {
     updateDuplicateStatus();
     if (inputSubtopic.value === ADD_SUBTOPIC_VALUE) {
@@ -3595,6 +4335,7 @@ function bindEvents() {
 
 async function initializeApp() {
   initializeOfflineCache();
+  initializeConnectionStatus();
   bindEvents();
   showPage(window.__vocabularyTrainerPage || 'add');
   setSelectedTestMode('');

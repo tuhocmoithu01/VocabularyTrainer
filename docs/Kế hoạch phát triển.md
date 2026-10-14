@@ -16,3 +16,5 @@
 - Sửa Auto Fill
 #  01/08/2026 
 - Luyện phát âm bằng AI (kiểu Google)
+# 14/10/2026 
+-node server/proxy-server.js. chạy trong terminal để khởi động ai 

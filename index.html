@@ -51,9 +51,46 @@
           <div class="entry-mode-switch" role="group" aria-label="Chế độ nhập từ">
             <button type="button" id="entry-mode-quick" class="secondary-button" aria-pressed="true">Thêm nhanh</button>
             <button type="button" id="entry-mode-detail" class="secondary-button" aria-pressed="false">Thêm chi tiết</button>
+            <button type="button" id="entry-mode-file" class="secondary-button" aria-pressed="false">Nhập danh sách từ file</button>
           </div>
 
           <form id="add-form" class="form-grid" autocomplete="off" data-entry-mode="quick">
+            <div id="file-import-panel" class="field-card file-import-panel entry-mode-file-only hidden">
+              <div id="file-import-dropzone" class="file-import-dropzone" tabindex="0" role="button" aria-label="Chọn file từ vựng">
+                <input type="file" id="file-import-input" accept=".csv,.txt,.md,.log,.docx,.rtf,.odt,.xlsx,.xls" hidden />
+                <div class="file-import-dropzone-inner">
+                  <div class="file-import-dropzone-title">Chọn file hoặc kéo thả file vào đây</div>
+                  <button type="button" id="file-import-choose" class="secondary-button">Chọn file</button>
+                </div>
+              </div>
+              <div id="file-import-meta" class="file-import-meta hidden">
+                <div><strong>Tệp:</strong> <span id="file-import-name">—</span></div>
+                <div><strong>Định dạng:</strong> <span id="file-import-format">—</span></div>
+                <div><strong>Số dòng đọc được:</strong> <span id="file-import-lines">0</span></div>
+              </div>
+              <div id="file-import-preview-wrap" class="file-import-preview-wrap hidden">
+                <table class="file-import-table">
+                  <thead>
+                    <tr>
+                      <th>STT</th>
+                      <th>Word / Phrase</th>
+                      <th>Vietnamese Meaning</th>
+                      <th>Topic</th>
+                      <th>Sub Topic</th>
+                      <th>Trạng thái</th>
+                    </tr>
+                  </thead>
+                  <tbody id="file-import-preview-body"></tbody>
+                </table>
+              </div>
+              <div class="file-import-actions">
+                <button type="button" id="file-import-validate" class="primary-button">Kiểm tra dữ liệu</button>
+                <button type="button" id="file-import-submit" class="primary-button" disabled>Nhập vào bộ từ vựng</button>
+                <button type="button" id="file-import-cancel" class="secondary-button">Hủy</button>
+                <button type="button" id="file-import-reset" class="secondary-button">Chọn file khác</button>
+              </div>
+              <div id="file-import-feedback" class="feedback" aria-live="polite"></div>
+            </div>
             <div class="field-card field-card-with-actions">
               <label>
                 <span>Topic</span>
@@ -474,7 +511,7 @@
       });
     });
 
-    import('./app.js?v=20261008-1');
+    import('./app.js?v=20261014-3');
   </script>
 </body>
 </html>

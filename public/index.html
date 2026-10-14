@@ -7,7 +7,7 @@
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
-  <link rel="stylesheet" href="style.css?v=20260710-1" />
+  <link rel="stylesheet" href="../style.css?v=20260710-1" />
 </head>
 <body>
   <div class="app-shell">
@@ -41,13 +41,55 @@
             </div>
           </div>
 
-          <form id="add-form" class="form-grid" autocomplete="off">
+          <div class="entry-mode-switch" role="group" aria-label="Chế độ nhập từ">
+            <button type="button" id="entry-mode-quick" class="secondary-button" aria-pressed="true">Thêm nhanh</button>
+            <button type="button" id="entry-mode-detail" class="secondary-button" aria-pressed="false">Thêm chi tiết</button>
+            <button type="button" id="entry-mode-file" class="secondary-button" aria-pressed="false">Nhập danh sách từ file</button>
+          </div>
+
+          <form id="add-form" class="form-grid" autocomplete="off" data-entry-mode="quick">
+            <div id="file-import-panel" class="field-card file-import-panel entry-mode-file-only hidden">
+              <div id="file-import-dropzone" class="file-import-dropzone" tabindex="0" role="button" aria-label="Chọn file từ vựng">
+                <input type="file" id="file-import-input" accept=".csv,.txt,.md,.log,.docx,.rtf,.odt,.xlsx,.xls" hidden />
+                <div class="file-import-dropzone-inner">
+                  <div class="file-import-dropzone-title">Chọn file hoặc kéo thả file vào đây</div>
+                  <button type="button" id="file-import-choose" class="secondary-button">Chọn file</button>
+                </div>
+              </div>
+              <div id="file-import-meta" class="file-import-meta hidden">
+                <div><strong>Tệp:</strong> <span id="file-import-name">—</span></div>
+                <div><strong>Định dạng:</strong> <span id="file-import-format">—</span></div>
+                <div><strong>Số dòng đọc được:</strong> <span id="file-import-lines">0</span></div>
+              </div>
+              <div id="file-import-preview-wrap" class="file-import-preview-wrap hidden">
+                <table class="file-import-table">
+                  <thead>
+                    <tr>
+                      <th>STT</th>
+                      <th>Word / Phrase</th>
+                      <th>Vietnamese Meaning</th>
+                      <th>Topic</th>
+                      <th>Sub Topic</th>
+                      <th>Trạng thái</th>
+                    </tr>
+                  </thead>
+                  <tbody id="file-import-preview-body"></tbody>
+                </table>
+              </div>
+              <div class="file-import-actions">
+                <button type="button" id="file-import-validate" class="primary-button">Kiểm tra dữ liệu</button>
+                <button type="button" id="file-import-submit" class="primary-button" disabled>Nhập vào bộ từ vựng</button>
+                <button type="button" id="file-import-cancel" class="secondary-button">Hủy</button>
+                <button type="button" id="file-import-reset" class="secondary-button">Chọn file khác</button>
+              </div>
+              <div id="file-import-feedback" class="feedback" aria-live="polite"></div>
+            </div>
             <div class="field-card field-card-with-actions">
               <label>
                 <span>Topic</span>
                 <select id="input-topic" name="topic"></select>
               </label>
-              <div class="select-actions">
+              <div class="select-actions entry-mode-detail-only hidden">
                 <button type="button" id="rename-topic" class="icon-button" aria-label="Rename topic">✏️</button>
                 <button type="button" id="delete-topic" class="icon-button" aria-label="Delete topic">🗑</button>
               </div>
@@ -57,81 +99,85 @@
                 <span>Sub Topic</span>
                 <select id="input-subtopic" name="subTopic"></select>
               </label>
-              <div class="select-actions">
+              <div class="select-actions entry-mode-detail-only hidden">
                 <button type="button" id="rename-subtopic" class="icon-button" aria-label="Rename sub topic">✏️</button>
                 <button type="button" id="delete-subtopic" class="icon-button" aria-label="Delete sub topic">🗑</button>
               </div>
             </div>
-            <div class="field-card">
+            <div class="field-card entry-mode-detail-only hidden">
               <span>Chế độ nhập</span>
               <div class="input-mode-group">
                 <label><input type="radio" id="input-mode-manual" name="input-mode" value="manual" checked /> Thủ công</label>
                 <label><input type="radio" id="input-mode-image" name="input-mode" value="image" /> Từ hình ảnh</label>
               </div>
             </div>
-            <div id="image-import-panel" class="field-card hidden">
-              <div class="image-import-instructions">Ảnh sẽ được gửi tới Gemini để nhận diện từ vựng.</div>
-              <label>
-                <span>Chọn ảnh</span>
-                <input type="file" id="image-import-input" accept="image/*" />
-              </label>
-              <div id="image-import-instructions" class="image-import-instructions">Hoặc Paste Image (Ctrl+V) khi đang ở chế độ Từ hình ảnh.</div>
-              <div id="image-import-status" class="feedback image-import-status" aria-live="polite"></div>
-              <div id="image-import-preview" class="image-import-preview hidden">
-                <img id="image-import-preview-img" alt="Preview ảnh" />
-                <div class="image-import-actions">
-                  <button type="button" id="image-import-change" class="secondary-button">Đổi ảnh</button>
-                  <button type="button" id="image-import-rerun" class="secondary-button">OCR lại</button>
-                  <button type="button" id="image-import-clear" class="secondary-button">Xóa ảnh</button>
+            <div class="entry-mode-detail-only hidden">
+              <div id="image-import-panel" class="field-card hidden">
+                <div class="image-import-instructions">Ảnh sẽ được gửi tới Gemini để nhận diện từ vựng.</div>
+                <label>
+                  <span>Chọn ảnh</span>
+                  <input type="file" id="image-import-input" accept="image/*" />
+                </label>
+                <div id="image-import-instructions" class="image-import-instructions">Hoặc Paste Image (Ctrl+V) khi đang ở chế độ Từ hình ảnh.</div>
+                <div id="image-import-status" class="feedback image-import-status" aria-live="polite"></div>
+                <div id="image-import-preview" class="image-import-preview hidden">
+                  <img id="image-import-preview-img" alt="Preview ảnh" />
+                  <div class="image-import-actions">
+                    <button type="button" id="image-import-change" class="secondary-button">Đổi ảnh</button>
+                    <button type="button" id="image-import-rerun" class="secondary-button">OCR lại</button>
+                    <button type="button" id="image-import-clear" class="secondary-button">Xóa ảnh</button>
+                  </div>
                 </div>
               </div>
             </div>
-            <label>
+            <label class="entry-mode-detail-only hidden">
               <span>Type</span>
               <select id="input-type" name="type">
                 <option value="Word" selected>Word</option>
                 <option value="Phrase">Phrase</option>
               </select>
             </label>
-            <label>
+            <label class="entry-mode-detail-only hidden">
               <span>Part of Speech</span>
               <input type="text" id="input-part-of-speech" name="partOfSpeech" placeholder="verb, noun, adjective" />
             </label>
             <label>
-              <span data-field-label="term">Term</span>
+              <span>Từ / Cụm từ</span>
               <div class="word-input-wrapper">
                 <input type="text" id="input-word" name="word" required autocomplete="off" />
                 <ul id="word-suggestions" class="suggestions-list hidden" role="listbox" aria-label="Term suggestions"></ul>
               </div>
               <div id="duplicate-status" class="duplicate-status hidden" aria-live="polite"></div>
               <div id="duplicate-card" class="duplicate-card hidden"></div>
-              <div class="ai-generate-row">
+              <div class="ai-generate-row entry-mode-detail-only hidden">
                 <button type="button" id="btn-ai-generate" class="primary-button">✨ AI Generate</button>
               </div>
             </label>
-            <label>
+            <label class="entry-mode-detail-only hidden">
               <span>English Definition</span>
-              <input type="text" id="input-meaning" name="meaning" required />
+              <input type="text" id="input-meaning" name="meaning" />
             </label>
             <label>
-              <span>Vietnamese Meaning</span>
-              <input type="text" id="input-vietnamese-meaning" name="vietnameseMeaning" />
+              <span>Nghĩa tiếng Việt</span>
+              <input type="text" id="input-vietnamese-meaning" name="vietnameseMeaning" placeholder="Không bắt buộc" />
             </label>
-            <label>
+            <label class="entry-mode-detail-only hidden">
               <span>IPA</span>
               <input type="text" id="input-ipa" name="ipa" placeholder="/wɜːrk/" />
             </label>
-            <label class="full-width">
+            <label class="full-width entry-mode-detail-only hidden">
               <span>Ví dụ</span>
               <textarea id="input-example" name="example" rows="3" class="example-textarea"></textarea>
             </label>
-            <div id="ai-expansion-editor" class="ai-expansion-editor full-width"></div>
-            <label>
+            <div id="ai-expansion-editor" class="ai-expansion-editor full-width entry-mode-detail-only hidden"></div>
+            <label class="entry-mode-detail-only hidden">
               <span>Cụm từ cố định</span>
               <input type="text" id="input-fixed-phrases" name="fixedPhrases" placeholder="give an explanation, make a decision" />
             </label>
             <div class="form-actions full-width">
-              <button type="submit" id="add-submit" class="primary-button">Lưu từ</button>
+              <button type="submit" id="quick-add-submit" class="primary-button entry-mode-quick-only">Lưu và thêm tiếp</button>
+              <button type="button" id="quick-add-details" class="secondary-button entry-mode-quick-only">Thêm chi tiết</button>
+              <button type="submit" id="add-submit" class="primary-button entry-mode-detail-only hidden">Lưu từ</button>
               <button type="button" id="add-cancel" class="secondary-button hidden">Hủy</button>
               <div id="add-feedback" class="feedback" aria-live="polite"></div>
             </div>
@@ -452,7 +498,7 @@
       });
     });
 
-    import('./app.js?v=20261008-1');
+    import('../app.js?v=20261014-3');
   </script>
 </body>
 </html>

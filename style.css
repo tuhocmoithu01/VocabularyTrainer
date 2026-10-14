@@ -319,6 +319,111 @@ label {
   color: #b91c1c;
 }
 
+.file-import-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.file-import-dropzone {
+  display: grid;
+  place-items: center;
+  min-height: 148px;
+  border: 1.5px dashed rgba(37, 99, 235, 0.45);
+  border-radius: 20px;
+  background: rgba(37, 99, 235, 0.04);
+  transition: border-color 0.2s ease, background-color 0.2s ease, transform 0.2s ease;
+}
+
+.file-import-dropzone.drag-over {
+  border-color: rgba(37, 99, 235, 0.8);
+  background: rgba(37, 99, 235, 0.08);
+  transform: translateY(-1px);
+}
+
+.file-import-dropzone-inner {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  text-align: center;
+}
+
+.file-import-dropzone-title {
+  font-size: 1.05rem;
+  color: var(--text);
+}
+
+.file-import-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px 24px;
+  color: var(--muted);
+}
+
+.file-import-preview-wrap {
+  overflow-x: auto;
+  border: 1px solid rgba(100, 116, 139, 0.16);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.file-import-table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 720px;
+}
+
+.file-import-table th,
+.file-import-table td {
+  border-bottom: 1px solid rgba(100, 116, 139, 0.14);
+  padding: 10px 12px;
+  text-align: left;
+  vertical-align: top;
+}
+
+.file-import-table th {
+  background: rgba(37, 99, 235, 0.05);
+  color: var(--text);
+  font-weight: 700;
+}
+
+.file-import-table td {
+  background: transparent;
+  color: var(--text);
+}
+
+.file-import-status-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 5px 8px;
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.file-import-status-valid {
+  background: rgba(34, 197, 94, 0.12);
+  color: #166534;
+}
+
+.file-import-status-warning {
+  background: rgba(250, 204, 21, 0.14);
+  color: #92400e;
+}
+
+.file-import-status-error {
+  background: rgba(239, 68, 68, 0.12);
+  color: #b91c1c;
+}
+
+.file-import-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+
 input,
 textarea,
 select {
