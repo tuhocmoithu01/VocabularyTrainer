@@ -20,6 +20,10 @@ const MIME_TYPES = {
 function startStaticServer() {
   const server = http.createServer((request, response) => {
     const pathname = decodeURIComponent(new URL(request.url, 'http://localhost').pathname);
+    if (pathname === '/favicon.ico') {
+      response.writeHead(204).end();
+      return;
+    }
     const filePath = path.resolve(ROOT, `.${pathname === '/' ? '/index.html' : pathname}`);
     if (!filePath.startsWith(`${ROOT}${path.sep}`) && filePath !== path.join(ROOT, 'index.html')) {
       response.writeHead(403).end();
@@ -63,9 +67,9 @@ const [serviceWorkerSource, mainHtml, publicHtml] = await Promise.all([
   readFile(path.join(ROOT, 'index.html'), 'utf8'),
   readFile(path.join(ROOT, 'public', 'index.html'), 'utf8'),
 ]);
-assert.match(serviceWorkerSource, /vocabulary-trainer-static-v14/);
+assert.match(serviceWorkerSource, /const CACHE_NAME = 'vocabulary-trainer-static-v\d+';/);
 for (const html of [mainHtml, publicHtml]) {
-  assert.match(html, /app\.js\?v=20261014-3/);
+  assert.match(html, /app\.js\?v=\d{8}-\d+/);
 }
 
 const server = await startStaticServer();
@@ -77,11 +81,35 @@ try {
   browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox'] });
   const page = await browser.newPage();
   const pageErrors = [];
+  const pageConsoleErrors = [];
+  const pageHttpErrors = [];
   const qaTopic = `QA Topic ${Date.now()}`;
   const qaSubtopic = `QA Lesson ${Date.now()}`;
   let promptCount = 0;
   page.on('pageerror', (error) => pageErrors.push(error.message));
+  page.on('console', (message) => {
+    if (message.type() === 'error') pageConsoleErrors.push(message.text());
+  });
+  page.on('response', (response) => {
+    if (response.status() >= 400) pageHttpErrors.push(`${response.status()} ${response.url()}`);
+  });
   page.on('dialog', (dialog) => dialog.accept(promptCount++ === 0 ? qaTopic : qaSubtopic));
+  await page.evaluateOnNewDocument(() => {
+    window.__testSpeechRequests = [];
+    Object.defineProperty(window, 'speechSynthesis', {
+      configurable: true,
+      value: {
+        cancel() {},
+        speak(utterance) {
+          window.__testSpeechRequests.push(utterance.text);
+          setTimeout(() => {
+            utterance.onstart?.();
+            utterance.onend?.();
+          }, 0);
+        },
+      },
+    });
+  });
   await page.setBypassServiceWorker(true);
   await page.setRequestInterception(true);
   let ocrRequests = 0;
@@ -115,7 +143,10 @@ try {
   });
 
   await page.goto(`${origin}/`, { waitUntil: 'domcontentloaded' });
-  await page.click('#entry-mode-detail');
+  await page.waitForFunction(() => {
+    document.querySelector('#entry-mode-detail').click();
+    return document.querySelector('#input-meaning').required;
+  });
   assert.equal(await page.$eval('#input-meaning', (input) => input.required), true);
   assert.equal(await page.$eval('#entry-mode-detail', (button) => button.getAttribute('aria-pressed')), 'true');
   await page.click('#entry-mode-quick');
@@ -251,10 +282,101 @@ try {
   assert.equal(reloadedQuickEntry?.meanings?.vietnamese, 'cân bằng công việc và cuộc sống');
   await page.click('#entry-mode-detail');
   assert.equal(await page.$eval('#input-meaning', (input) => !input.closest('label').classList.contains('hidden')), true);
+
+  const consoleErrorCountBeforeVisibilityTest = pageConsoleErrors.length;
+  await page.click('.menu-button[data-page="test"]');
+  await page.click('#test-mode-dictation');
+  await page.click('#test-start');
+  await page.waitForFunction(() => {
+    const button = document.getElementById('test-word-visibility');
+    return !document.getElementById('test-session')?.classList.contains('hidden')
+      && button && !button.classList.contains('hidden');
+  });
+  const visibilityButton = '#test-word-visibility';
+  await page.setViewport({ width: 375, height: 812 });
+  const visibilityButtonBounds = await page.$eval(visibilityButton, (button) => {
+    const { x, width, height } = button.getBoundingClientRect();
+    return { x, width, height, viewportWidth: window.innerWidth };
+  });
+  assert.equal(visibilityButtonBounds.width >= 44 && visibilityButtonBounds.height >= 44, true);
+  assert.equal(visibilityButtonBounds.x >= 0 && visibilityButtonBounds.x + visibilityButtonBounds.width <= visibilityButtonBounds.viewportWidth, true);
+  const firstPromptCounter = await page.$eval('#test-counter', (counter) => counter.textContent);
+  assert.match(await page.$eval('#test-example', (prompt) => prompt.textContent), /^Word: /);
+
+  await page.click(visibilityButton);
+  assert.equal(await page.$eval(visibilityButton, (button) => button.getAttribute('aria-pressed')), 'true');
+  assert.equal(await page.$eval(visibilityButton, (button) => button.getAttribute('aria-label')), 'Hiện từ vựng');
+  assert.match(await page.$eval('#test-example', (prompt) => prompt.textContent), /^Word: ••••••$/);
+  await page.click(visibilityButton);
+  assert.equal(await page.$eval(visibilityButton, (button) => button.getAttribute('aria-pressed')), 'false');
+  await page.click(visibilityButton);
+  await page.focus(visibilityButton);
+  await page.keyboard.press('Space');
+  assert.equal(await page.$eval(visibilityButton, (button) => button.getAttribute('aria-pressed')), 'false');
+  await page.keyboard.press('Space');
+  assert.equal(await page.$eval(visibilityButton, (button) => button.getAttribute('aria-pressed')), 'true');
+
+  await page.$eval('#dictation-mode-select', (select) => {
+    select.value = 'example';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  assert.equal(await page.$eval(visibilityButton, (button) => button.classList.contains('hidden')), true);
+  await page.$eval('#dictation-mode-select', (select) => {
+    select.value = 'word';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+  });
+  assert.equal(await page.$eval(visibilityButton, (button) => button.getAttribute('aria-pressed')), 'true');
+
+  let speechRequestCount = await page.evaluate(() => window.__testSpeechRequests.length);
+  await page.click('#test-listen');
+  await page.waitForFunction((count) => window.__testSpeechRequests.length > count, {}, speechRequestCount);
+  const firstSpokenWord = await page.evaluate(() => window.__testSpeechRequests.at(-1));
+  assert.equal(firstSpokenWord.length > 0, true);
+  assert.equal(await page.$eval('#test-example', (prompt) => prompt.textContent), 'Word: ••••••');
+  await page.$eval('#test-answer', (input, answer) => {
+    input.value = answer;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  }, firstSpokenWord);
+  await page.click('#test-submit');
+  await page.waitForFunction(() => document.getElementById('test-answer')?.disabled);
+  assert.match(await page.$eval('#test-message', (message) => message.textContent), /Chính xác/);
+  await page.waitForFunction(
+    (counter) => document.getElementById('test-counter')?.textContent !== counter,
+    { timeout: 10000 },
+    firstPromptCounter,
+  );
+  assert.equal(await page.$eval(visibilityButton, (button) => button.getAttribute('aria-pressed')), 'true');
+  assert.match(await page.$eval('#test-example', (prompt) => prompt.textContent), /^Word: ••••••$/);
+
+  speechRequestCount = await page.evaluate(() => window.__testSpeechRequests.length);
+  await page.click('#test-listen');
+  await page.waitForFunction((count) => window.__testSpeechRequests.length > count, {}, speechRequestCount);
+  const nextSpokenWord = await page.evaluate(() => window.__testSpeechRequests.at(-1));
+  await page.$eval('#test-answer', (input, answer) => {
+    input.value = answer;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  }, nextSpokenWord);
+  await page.click('#test-submit');
+  await page.waitForFunction(() => !document.getElementById('test-summary')?.classList.contains('hidden'));
+
+  await page.click('#test-restart');
+  await page.click('#test-start');
+  await page.waitForFunction(() => !document.getElementById('test-word-visibility')?.classList.contains('hidden'));
+  assert.equal(await page.$eval(visibilityButton, (button) => button.getAttribute('aria-pressed')), 'false');
+  assert.doesNotMatch(await page.$eval('#test-example', (prompt) => prompt.textContent), /••••••/);
+  assert.equal(
+    pageConsoleErrors.length,
+    consoleErrorCountBeforeVisibilityTest,
+    `new browser console errors during Dictation visibility test: ${pageConsoleErrors.slice(consoleErrorCountBeforeVisibilityTest).join('; ')}; HTTP errors: ${pageHttpErrors.join('; ')}`,
+  );
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.click('.menu-button[data-page="test"]');
+  assert.equal(await page.$eval(visibilityButton, (button) => button.classList.contains('hidden')), true);
   assert.equal(pageErrors.length, 0, `browser JavaScript errors: ${pageErrors.join('; ')}`);
 
   console.log('ENTRY MODE E2E PASSED: quick phrases, optional meanings, selection retention, and reload.');
   console.log('IMAGE PASTE E2E PASSED: pasted image was imported and OCR rerun reused it.');
+  console.log('DICTATION VISIBILITY E2E PASSED: toggle, keyboard, listen, answer, next question, new test, and reload.');
 } finally {
   if (browser) {
     await browser.close();

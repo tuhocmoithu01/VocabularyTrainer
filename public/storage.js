@@ -396,17 +396,22 @@ export function toFirestorePayload(entry) {
 
 function resolveEntryDocumentId(entry, fallbackEntries = vocabularyCache) {
   if (entry?.docId) {
-    return entry.docId;
+    return encodeFirestoreDocumentId(entry.docId);
   }
 
   if (entry?.word) {
     const matchingEntry = fallbackEntries.find((candidate) => normalizeWordKey(candidate.word) === normalizeWordKey(entry.word));
     if (matchingEntry?.docId) {
-      return matchingEntry.docId;
+      return encodeFirestoreDocumentId(matchingEntry.docId);
     }
   }
 
-  return normalizeWordKey(entry?.word) || '';
+  return encodeFirestoreDocumentId(normalizeWordKey(entry?.word)) || '';
+}
+
+function encodeFirestoreDocumentId(value) {
+  const documentId = String(value || '').trim();
+  return documentId.includes('/') ? encodeURIComponent(documentId) : documentId;
 }
 
 function buildEntryWithDocId(entry, fallbackEntries = vocabularyCache, language = activeLanguage) {

@@ -10,7 +10,7 @@
   <meta http-equiv="Expires" content="0" />
   <link rel="manifest" href="/manifest.webmanifest" />
   <link rel="apple-touch-icon" href="/assets/icons/icon-192.png" />
-  <link rel="stylesheet" href="style.css?v=20260710-1" />
+  <link rel="stylesheet" href="style.css?v=20261015-1" />
 </head>
 <body>
   <div class="app-shell">
@@ -374,6 +374,7 @@
               <div class="button-row" id="test-mode-picker">
                 <button type="button" id="test-mode-speaking" class="secondary-button" data-mode="speaking">🎤 Speaking Test</button>
                 <button type="button" id="test-mode-dictation" class="secondary-button" data-mode="dictation">✍️ Dictation Test</button>
+                <button type="button" id="test-mode-pronunciation-coach" class="secondary-button" data-mode="pronunciation-coach">🗣 Pronunciation Coach</button>
               </div>
               <label class="hidden" id="speaking-mode-wrapper">
                 <span>Speaking Mode</span>
@@ -428,7 +429,10 @@
             </div>
             <div class="card-row">
               <span class="label">Prompt</span>
-              <p id="test-example"></p>
+              <div class="test-prompt-content">
+                <p id="test-example"></p>
+                <button type="button" id="test-word-visibility" class="test-word-visibility-button hidden" aria-label="Ẩn từ vựng" title="Ẩn từ vựng" aria-pressed="false">👁️</button>
+              </div>
             </div>
             <!-- Pronunciation Result Card -->
             <div id="pronunciation-result" class="pronunciation-result hidden">
@@ -488,6 +492,55 @@
             <button id="test-restart" class="primary-button">Chạy lại</button>
           </div>
         </div>
+
+        <div id="pronunciation-coach-session" class="page-card pronunciation-coach-session hidden">
+          <div class="session-header">
+            <div>
+              <h3>Pronunciation Coach</h3>
+              <p id="pronunciation-coach-topic"></p>
+              <p id="pronunciation-coach-counter"></p>
+              <p class="pronunciation-coach-privacy">Nhận diện do trình duyệt cung cấp, có thể cần mạng và được xử lý theo chính sách của trình duyệt. Ứng dụng không lưu bản ghi âm.</p>
+            </div>
+            <div class="progress-bar">
+              <span id="pronunciation-coach-progress" class="progress-fill"></span>
+            </div>
+          </div>
+          <div class="pronunciation-coach-card">
+            <div class="pronunciation-coach-word-row">
+              <p id="pronunciation-coach-word" class="word-value"></p>
+              <button type="button" id="pronunciation-coach-toggle-word" class="secondary-button" aria-label="Ẩn từ" aria-pressed="false">👁️</button>
+            </div>
+            <p id="pronunciation-coach-ipa" class="pronunciation-coach-ipa"></p>
+            <p id="pronunciation-coach-meaning" class="pronunciation-coach-meaning"></p>
+            <p id="pronunciation-coach-status" class="mode-pill" role="status" aria-live="polite"></p>
+            <p id="pronunciation-coach-feedback" class="feedback" aria-live="polite"></p>
+            <div id="pronunciation-coach-syllable-choice" class="pronunciation-coach-choice hidden">
+              <p>Đã có hai lần transcript chưa khớp. Bạn muốn thử luyện từng âm tiết không?</p>
+              <p>Hiện chưa có dữ liệu chia âm tiết đáng tin cậy; chọn Có sẽ dùng nghe chậm cả từ thay vì tự chia.</p>
+              <div class="button-row">
+                <button type="button" id="pronunciation-coach-syllable-yes" class="primary-button">Có, nghe chậm</button>
+                <button type="button" id="pronunciation-coach-syllable-no" class="secondary-button">Không, thử lại cả từ</button>
+              </div>
+            </div>
+            <div id="pronunciation-coach-manual-entry" class="field-card pronunciation-coach-manual-entry hidden">
+              <label for="pronunciation-coach-transcript">Nhập từ bạn vừa đọc để đối chiếu transcript</label>
+              <input type="text" id="pronunciation-coach-transcript" autocomplete="off" />
+              <p class="feedback">Đối chiếu bằng chữ không đánh giá được phát âm.</p>
+              <button type="button" id="pronunciation-coach-check-transcript" class="secondary-button">Đối chiếu chữ</button>
+            </div>
+            <div class="button-row pronunciation-coach-actions">
+              <button type="button" id="pronunciation-coach-listen" class="secondary-button">🔊 Nghe mẫu</button>
+              <button type="button" id="pronunciation-coach-listen-slow" class="secondary-button">🐢 Nghe chậm</button>
+              <button type="button" id="pronunciation-coach-record" class="primary-button">🎤 Tôi đã sẵn sàng</button>
+              <button type="button" id="pronunciation-coach-stop-record" class="secondary-button hidden">⏹ Dừng nghe</button>
+              <button type="button" id="pronunciation-coach-show-manual" class="secondary-button">⌨️ Nhập transcript</button>
+              <button type="button" id="pronunciation-coach-skip" class="secondary-button">Bỏ qua từ</button>
+              <button type="button" id="pronunciation-coach-pause" class="secondary-button">Tạm dừng</button>
+              <button type="button" id="pronunciation-coach-resume" class="secondary-button hidden">Tiếp tục</button>
+              <button type="button" id="pronunciation-coach-end" class="secondary-button">Thoát buổi học</button>
+            </div>
+          </div>
+        </div>
       </section>
     </main>
   </div>
@@ -511,7 +564,7 @@
       });
     });
 
-    import('./app.js?v=20261014-3');
+    import('./app.js?v=20261022-1');
   </script>
 </body>
 </html>

@@ -1,4 +1,4 @@
-const CACHE_NAME = 'vocabulary-trainer-static-v14';
+const CACHE_NAME = 'vocabulary-trainer-static-v19';
 const STATIC_ASSETS = [
   '/',
   '/index.html',
@@ -26,6 +26,7 @@ const STATIC_ASSETS = [
   '/pronunciation-avatar.js',
   '/pronunciation-feedback.js',
   '/pronunciation-history.js',
+  '/pronunciation-coach.js',
   '/pronunciation-integration.js',
   '/pronunciation-viewer.js',
   '/sound.js',

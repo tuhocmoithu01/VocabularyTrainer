@@ -24,6 +24,7 @@ import {
   DEFAULT_TOPIC,
   DEFAULT_SUBTOPIC,
   DEFAULT_TYPE,
+  normalizeWordAndPartOfSpeech,
   normalizeWordKey,
 } from './storage.js';
 import { getCurrentLanguage, getLanguageLabel, getLanguageOptions, setCurrentLanguage } from './language-manager.js';
@@ -50,6 +51,7 @@ import {
 } from './speech-recognition.js';
 import { createSpeechUtterance, getSpeechLanguageCode, getSlowPlaybackRate } from './speech.js';
 import { createSpeechStateMachine, SPEECH_STATES } from './speech-state.js';
+import { createPronunciationCoachSession, PRONUNCIATION_COACH_STATES } from './pronunciation-coach.js';
 import { createSpeakingTestFlowState, getAdjacentQuestionIndex } from './speaking-test-flow.js';
 import {
   getDictationInstruction,
@@ -156,6 +158,7 @@ const testFeedback = document.getElementById('test-feedback');
 const testSession = document.getElementById('test-session');
 const testMeaning = document.getElementById('test-meaning');
 const testExample = document.getElementById('test-example');
+const testWordVisibility = document.getElementById('test-word-visibility');
 const testAnswer = document.getElementById('test-answer');
 const testSubmit = document.getElementById('test-submit');
 const testPrevious = document.getElementById('test-previous');
@@ -170,6 +173,7 @@ const summaryBreakdown = document.getElementById('summary-breakdown');
 const testRestart = document.getElementById('test-restart');
 const testModeSpeaking = document.getElementById('test-mode-speaking');
 const testModeDictation = document.getElementById('test-mode-dictation');
+const testModePronunciationCoach = document.getElementById('test-mode-pronunciation-coach');
 const testModeHint = document.getElementById('test-mode-hint');
 const testModeLabel = document.getElementById('test-mode-label');
 const testStageLabel = document.getElementById('test-stage-label');
@@ -182,6 +186,31 @@ const speakingModeWrapper = document.getElementById('speaking-mode-wrapper');
 const speakingModeSelect = document.getElementById('speaking-mode-select');
 const dictationModeWrapper = document.getElementById('dictation-mode-wrapper');
 const dictationModeSelect = document.getElementById('dictation-mode-select');
+const pronunciationCoachSessionElement = document.getElementById('pronunciation-coach-session');
+const pronunciationCoachTopic = document.getElementById('pronunciation-coach-topic');
+const pronunciationCoachCounter = document.getElementById('pronunciation-coach-counter');
+const pronunciationCoachProgress = document.getElementById('pronunciation-coach-progress');
+const pronunciationCoachWord = document.getElementById('pronunciation-coach-word');
+const pronunciationCoachToggleWord = document.getElementById('pronunciation-coach-toggle-word');
+const pronunciationCoachIpa = document.getElementById('pronunciation-coach-ipa');
+const pronunciationCoachMeaning = document.getElementById('pronunciation-coach-meaning');
+const pronunciationCoachStatus = document.getElementById('pronunciation-coach-status');
+const pronunciationCoachFeedback = document.getElementById('pronunciation-coach-feedback');
+const pronunciationCoachSyllableChoice = document.getElementById('pronunciation-coach-syllable-choice');
+const pronunciationCoachSyllableYes = document.getElementById('pronunciation-coach-syllable-yes');
+const pronunciationCoachSyllableNo = document.getElementById('pronunciation-coach-syllable-no');
+const pronunciationCoachManualEntry = document.getElementById('pronunciation-coach-manual-entry');
+const pronunciationCoachTranscript = document.getElementById('pronunciation-coach-transcript');
+const pronunciationCoachCheckTranscript = document.getElementById('pronunciation-coach-check-transcript');
+const pronunciationCoachShowManual = document.getElementById('pronunciation-coach-show-manual');
+const pronunciationCoachListen = document.getElementById('pronunciation-coach-listen');
+const pronunciationCoachListenSlow = document.getElementById('pronunciation-coach-listen-slow');
+const pronunciationCoachRecord = document.getElementById('pronunciation-coach-record');
+const pronunciationCoachStopRecord = document.getElementById('pronunciation-coach-stop-record');
+const pronunciationCoachSkip = document.getElementById('pronunciation-coach-skip');
+const pronunciationCoachPause = document.getElementById('pronunciation-coach-pause');
+const pronunciationCoachResume = document.getElementById('pronunciation-coach-resume');
+const pronunciationCoachEnd = document.getElementById('pronunciation-coach-end');
 const soundToggle = document.getElementById('sound-toggle');
 const languageSelect = document.getElementById('language-select');
 const languageLabel = document.getElementById('language-label');
@@ -234,6 +263,14 @@ let dictationWrongAttempts = 0;
 let selectedTestMode = '';
 let selectedSpeakingMode = 'vocabulary';
 let selectedDictationMode = 'word';
+let isDictationWordHidden = false;
+let pronunciationCoach = null;
+let pronunciationCoachRecognition = null;
+let pronunciationCoachTimeout = null;
+let pronunciationCoachRunId = 0;
+let pronunciationCoachMessage = '';
+let isPronunciationCoachWordHidden = true;
+let isPronunciationCoachManualEntryVisible = false;
 let dictationStage = 'word';
 let currentPlaybackRate = 1;
 let testRecognition = null;
@@ -384,6 +421,9 @@ async function playWrongSound() {
 }
 
 function showPage(pageName) {
+  if (pageName !== 'test' && pronunciationCoach) {
+    endPronunciationCoachSession();
+  }
   window.__vocabularyTrainerPage = pageName;
   pages.forEach((page) => page.classList.toggle('active', page.id === `page-${pageName}`));
   pageButtons.forEach((button) => button.classList.toggle('active', button.dataset.page === pageName));
@@ -911,7 +951,8 @@ function validateImportedRows(rows) {
   const validRows = [];
 
   return rows.map((row, index) => {
-    const word = String(row.word || '').trim();
+    const wordAndPartOfSpeech = normalizeWordAndPartOfSpeech(row.word, row.partOfSpeech);
+    const word = wordAndPartOfSpeech.word;
     const meaning = String(row.meaning || '').trim();
     const topic = String(row.topic || inputTopic?.value || '').trim() || DEFAULT_TOPIC;
     const subTopic = String(row.subTopic || inputSubtopic?.value || '').trim() || DEFAULT_SUBTOPIC;
@@ -933,6 +974,7 @@ function validateImportedRows(rows) {
         index,
         word,
         meaning,
+        partOfSpeech: wordAndPartOfSpeech.partOfSpeech,
         topic,
         subTopic,
       });
@@ -941,6 +983,7 @@ function validateImportedRows(rows) {
     return {
       index,
       word,
+      partOfSpeech: wordAndPartOfSpeech.partOfSpeech,
       meaning,
       topic,
       subTopic,
@@ -1028,6 +1071,7 @@ async function importFileEntries() {
         ipa: '',
         topic: entry.topic,
         subTopic: entry.subTopic,
+        partOfSpeech: entry.partOfSpeech,
         type: /\s/.test(entry.word) ? 'Phrase' : DEFAULT_TYPE,
         meanings: buildMeaningMap({}, 'english', entry.meaning || ''),
         partOfSpeech: '',
@@ -2263,6 +2307,9 @@ function startAutoNext() {
 
 // Toggle the active test mode between speaking and dictation.
 function setSelectedTestMode(mode) {
+  if (pronunciationCoach && mode !== 'pronunciation-coach') {
+    endPronunciationCoachSession();
+  }
   cancelAutoNext();
   cancelSpeakingAutoNext();
   isTestTransitioning = false;
@@ -2271,8 +2318,17 @@ function setSelectedTestMode(mode) {
   selectedDictationMode = normalizeDictationMode(dictationModeSelect?.value || selectedDictationMode);
   testModeSpeaking.classList.toggle('active-mode', mode === 'speaking');
   testModeDictation.classList.toggle('active-mode', mode === 'dictation');
+  testModePronunciationCoach.classList.toggle('active-mode', mode === 'pronunciation-coach');
   speakingModeWrapper?.classList.toggle('hidden', mode !== 'speaking');
   dictationModeWrapper?.classList.toggle('hidden', mode !== 'dictation');
+  testStart.textContent = mode === 'pronunciation-coach' ? 'Bắt đầu luyện phát âm' : 'Bắt đầu Test';
+
+  if (mode === 'pronunciation-coach') {
+    testRecord.disabled = true;
+    testModeHint.textContent = 'Pronunciation Coach dùng nhận diện transcript, không chấm chính xác âm vị.';
+    updateSpeechButtonState();
+    return;
+  }
 
   if (mode === 'speaking' && !isSpeechRecognitionSupported()) {
     testRecord.disabled = true;
@@ -2284,6 +2340,378 @@ function setSelectedTestMode(mode) {
   testRecord.disabled = false;
   testModeHint.textContent = mode === 'speaking' ? 'Chế độ Speaking Test đã được chọn.' : 'Chế độ Dictation Test đã được chọn.';
   updateSpeechButtonState();
+}
+
+function getPronunciationCoachErrorMessage(reason) {
+  switch (reason) {
+    case 'not-allowed':
+    case 'service-not-allowed':
+      return 'Microphone chưa được cấp quyền. Hãy cho phép truy cập micro rồi thử lại.';
+    case 'audio-capture':
+      return 'Không truy cập được micro. Kiểm tra thiết bị và thử lại.';
+    case 'network':
+      return 'Nhận diện giọng nói cần kết nối mạng. Kiểm tra mạng rồi thử lại.';
+    case 'no-speech':
+      return 'Không phát hiện tiếng nói. Đây không được tính là lỗi phát âm; hãy thử lại hoặc nhập transcript.';
+    case 'language-not-supported':
+      return 'Trình duyệt không hỗ trợ nhận diện tiếng Anh trên thiết bị này.';
+    case 'unsupported':
+      return getSpeechRecognitionUnsupportedMessage();
+    case 'speech-synthesis':
+      return 'Trình duyệt không thể phát âm mẫu lúc này.';
+    default:
+      return getSpeechRecognitionErrorMessage(reason);
+  }
+}
+
+function clearPronunciationCoachRecognition(abortRecognition = true) {
+  if (pronunciationCoachTimeout !== null) {
+    window.clearTimeout(pronunciationCoachTimeout);
+    pronunciationCoachTimeout = null;
+  }
+
+  if (!pronunciationCoachRecognition) {
+    return;
+  }
+
+  const recognition = pronunciationCoachRecognition;
+  pronunciationCoachRecognition = null;
+  recognition.onstart = null;
+  recognition.onresult = null;
+  recognition.onerror = null;
+  recognition.onend = null;
+  if (abortRecognition) {
+    try {
+      recognition.abort();
+    } catch (error) {
+      console.warn('Failed to stop pronunciation coach recognition', error);
+    }
+  }
+}
+
+function cancelPronunciationCoachActivities() {
+  pronunciationCoachRunId += 1;
+  clearPronunciationCoachRecognition();
+  if ('speechSynthesis' in window) {
+    window.speechSynthesis.cancel();
+  }
+}
+
+function renderPronunciationCoach() {
+  if (!pronunciationCoach) {
+    pronunciationCoachSessionElement.classList.add('hidden');
+    return;
+  }
+
+  const snapshot = pronunciationCoach.snapshot();
+  const entry = snapshot.currentWord;
+  const isCompleted = snapshot.state === PRONUNCIATION_COACH_STATES.COMPLETED;
+  const progressCount = snapshot.skippedCount;
+  const progressPercent = snapshot.total ? Math.round((progressCount / snapshot.total) * 100) : 0;
+  const stateLabels = {
+    [PRONUNCIATION_COACH_STATES.READY]: 'Sẵn sàng',
+    [PRONUNCIATION_COACH_STATES.PLAYING_WORD]: 'Đang phát mẫu',
+    [PRONUNCIATION_COACH_STATES.WAITING_FOR_SPEECH]: 'Đang chờ bạn đọc',
+    [PRONUNCIATION_COACH_STATES.RECORDING]: 'Đang nghe',
+    [PRONUNCIATION_COACH_STATES.ASSESSING]: 'Đang đối chiếu transcript',
+    [PRONUNCIATION_COACH_STATES.TRANSCRIPT_MATCHED]: 'Transcript trùng; chưa chấm phát âm',
+    [PRONUNCIATION_COACH_STATES.RETRY]: 'Chưa khớp transcript',
+    [PRONUNCIATION_COACH_STATES.ASK_SYLLABLE_PRACTICE]: 'Cần chọn bước tiếp theo',
+    [PRONUNCIATION_COACH_STATES.PAUSED]: 'Đã tạm dừng',
+    [PRONUNCIATION_COACH_STATES.ERROR]: 'Không thể đánh giá',
+    [PRONUNCIATION_COACH_STATES.COMPLETED]: 'Đã kết thúc',
+  };
+
+  pronunciationCoachSessionElement.classList.remove('hidden');
+  testSession.classList.add('hidden');
+  testSummary.classList.add('hidden');
+  pronunciationCoachTopic.textContent = `${snapshot.topic || 'All topics'} · ${snapshot.subTopic || 'All subtopics'}`;
+  pronunciationCoachCounter.textContent = isCompleted
+    ? `Đã bỏ qua: ${snapshot.skippedCount} · Tổng: ${snapshot.total}`
+    : `Từ ${Math.min(snapshot.currentIndex + 1, snapshot.total)} / ${snapshot.total} · Đã bỏ qua: ${snapshot.skippedCount}`;
+  pronunciationCoachProgress.style.width = `${progressPercent}%`;
+  pronunciationCoachStatus.textContent = stateLabels[snapshot.state] || 'Sẵn sàng';
+  pronunciationCoachFeedback.textContent = pronunciationCoachMessage;
+  pronunciationCoachSyllableChoice.classList.toggle(
+    'hidden',
+    snapshot.state !== PRONUNCIATION_COACH_STATES.ASK_SYLLABLE_PRACTICE,
+  );
+  pronunciationCoachManualEntry.classList.toggle(
+    'hidden',
+    !isPronunciationCoachManualEntryVisible,
+  );
+
+  if (entry) {
+    pronunciationCoachWord.textContent = isPronunciationCoachWordHidden ? '••••••' : entry.word;
+    pronunciationCoachToggleWord.setAttribute('aria-label', isPronunciationCoachWordHidden ? 'Hiện từ' : 'Ẩn từ');
+    pronunciationCoachToggleWord.setAttribute('aria-pressed', String(!isPronunciationCoachWordHidden));
+    pronunciationCoachIpa.textContent = entry.ipa || entry.pronunciation || 'Chưa có IPA trong dữ liệu.';
+    const meaningMap = entry.meanings && typeof entry.meanings === 'object' ? entry.meanings : {};
+    pronunciationCoachMeaning.textContent = meaningMap.vietnamese || meaningMap.vi || entry.meaning || '';
+  } else {
+    pronunciationCoachWord.textContent = '';
+    pronunciationCoachIpa.textContent = '';
+    pronunciationCoachMeaning.textContent = '';
+  }
+
+  const isRecording = snapshot.state === PRONUNCIATION_COACH_STATES.RECORDING;
+  const isBusy = isRecording
+    || snapshot.state === PRONUNCIATION_COACH_STATES.PLAYING_WORD
+    || snapshot.state === PRONUNCIATION_COACH_STATES.ASSESSING
+    || snapshot.state === PRONUNCIATION_COACH_STATES.ASK_SYLLABLE_PRACTICE;
+  const isPaused = snapshot.state === PRONUNCIATION_COACH_STATES.PAUSED;
+  pronunciationCoachListen.disabled = !entry || isBusy || isPaused || isCompleted;
+  pronunciationCoachListenSlow.disabled = !entry || isBusy || isPaused || isCompleted;
+  pronunciationCoachRecord.disabled = !entry || isBusy || isPaused || isCompleted || !isSpeechRecognitionSupported();
+  pronunciationCoachRecord.textContent = snapshot.attemptsForWord
+    || snapshot.state === PRONUNCIATION_COACH_STATES.ERROR
+    || snapshot.state === PRONUNCIATION_COACH_STATES.TRANSCRIPT_MATCHED
+    ? '🎤 Thử lại'
+    : '🎤 Tôi đã sẵn sàng';
+  pronunciationCoachStopRecord.classList.toggle('hidden', !isRecording);
+  pronunciationCoachPause.classList.toggle('hidden', isPaused || isCompleted);
+  pronunciationCoachResume.classList.toggle('hidden', !isPaused);
+  pronunciationCoachSkip.disabled = !entry || isPaused || isCompleted;
+  pronunciationCoachEnd.disabled = false;
+  pronunciationCoachShowManual.classList.toggle('hidden', isCompleted);
+  pronunciationCoachToggleWord.classList.toggle('hidden', !entry);
+}
+
+function playPronunciationCoachWord(rate = 0.8) {
+  const snapshot = pronunciationCoach?.snapshot();
+  const entry = snapshot?.currentWord;
+  if (!snapshot?.active || !entry) {
+    return false;
+  }
+
+  cancelPronunciationCoachActivities();
+  if (!('speechSynthesis' in window)) {
+    pronunciationCoach.reportError('speech-synthesis');
+    pronunciationCoachMessage = getPronunciationCoachErrorMessage('speech-synthesis');
+    isPronunciationCoachManualEntryVisible = true;
+    renderPronunciationCoach();
+    return false;
+  }
+
+  pronunciationCoach.setState(PRONUNCIATION_COACH_STATES.PLAYING_WORD);
+  pronunciationCoachMessage = 'Nghe mẫu; sau đó nhấn micro khi bạn sẵn sàng.';
+  renderPronunciationCoach();
+  const runId = pronunciationCoachRunId;
+  try {
+    const utterance = createSpeechUtterance(entry.word, 'english', { rate, pitch: 1 });
+    utterance.onstart = () => {
+      if (runId === pronunciationCoachRunId) {
+        pronunciationCoachStatus.textContent = 'Đang phát mẫu';
+      }
+    };
+    utterance.onend = () => {
+      if (runId !== pronunciationCoachRunId || !pronunciationCoach?.snapshot().active) {
+        return;
+      }
+      pronunciationCoach.setState(PRONUNCIATION_COACH_STATES.WAITING_FOR_SPEECH);
+      pronunciationCoachMessage = 'Nhấn micro khi bạn đã sẵn sàng đọc.';
+      renderPronunciationCoach();
+    };
+    utterance.onerror = () => {
+      if (runId !== pronunciationCoachRunId || !pronunciationCoach?.snapshot().active) {
+        return;
+      }
+      pronunciationCoach.reportError('speech-synthesis');
+      pronunciationCoachMessage = getPronunciationCoachErrorMessage('speech-synthesis');
+      renderPronunciationCoach();
+    };
+    window.speechSynthesis.speak(utterance);
+    return true;
+  } catch (error) {
+    console.error('Pronunciation coach sample playback failed', error);
+    pronunciationCoach.reportError('speech-synthesis');
+    pronunciationCoachMessage = getPronunciationCoachErrorMessage('speech-synthesis');
+    renderPronunciationCoach();
+    return false;
+  }
+}
+
+function schedulePronunciationCoachNextWord() {
+  const session = pronunciationCoach;
+  const runId = pronunciationCoachRunId;
+  window.setTimeout(() => {
+    if (pronunciationCoach === session && runId === pronunciationCoachRunId && session?.snapshot().active) {
+      playPronunciationCoachWord();
+    }
+  }, 900);
+}
+
+function finishPronunciationCoachTranscript(transcript, source = 'speech') {
+  const result = pronunciationCoach?.assessTranscript(transcript);
+  if (!result?.accepted) {
+    return;
+  }
+
+  if (result.transcriptMatches) {
+    pronunciationCoachMessage = 'Speech Recognition nhận ra đúng từ. Việc này không đánh giá phát âm, nên từ chưa được đánh dấu đạt. Bạn có thể thử lại, nghe chậm hoặc chủ động bỏ qua.';
+    renderPronunciationCoach();
+    return;
+  }
+
+  if (result.reason === 'no-speech') {
+    pronunciationCoachMessage = getPronunciationCoachErrorMessage('no-speech');
+    isPronunciationCoachManualEntryVisible = true;
+  } else if (source === 'manual') {
+    pronunciationCoachMessage = 'Transcript chữ chưa khớp. Việc nhập chữ không đánh giá được phát âm; bạn có thể thử lại bằng micro hoặc bỏ qua từ.';
+  } else {
+    pronunciationCoachMessage = `Nhận diện được: “${transcript}”. Transcript chưa trùng; nhận diện giọng nói có thể nhầm và không chẩn đoán được âm sai.`;
+  }
+  renderPronunciationCoach();
+}
+
+function startPronunciationCoachRecording() {
+  if (!pronunciationCoach?.snapshot().active || !isSpeechRecognitionSupported()) {
+    pronunciationCoach?.reportError('unsupported');
+    pronunciationCoachMessage = getSpeechRecognitionUnsupportedMessage();
+    isPronunciationCoachManualEntryVisible = true;
+    renderPronunciationCoach();
+    return;
+  }
+
+  if (navigator.onLine === false) {
+    pronunciationCoach.reportError('network');
+    pronunciationCoachMessage = getPronunciationCoachErrorMessage('network');
+    isPronunciationCoachManualEntryVisible = true;
+    renderPronunciationCoach();
+    return;
+  }
+
+  clearPronunciationCoachRecognition();
+  if (!pronunciationCoach.beginRecording()) {
+    return;
+  }
+
+  if ('speechSynthesis' in window) {
+    window.speechSynthesis.cancel();
+  }
+  const runId = ++pronunciationCoachRunId;
+  const SpeechRecognition = getSpeechRecognitionConstructor();
+  let recognition;
+  try {
+    recognition = new SpeechRecognition();
+  } catch (error) {
+    console.error('Pronunciation coach recognition could not be created', error);
+    pronunciationCoach.reportError('unknown');
+    pronunciationCoachMessage = getPronunciationCoachErrorMessage('unknown');
+    isPronunciationCoachManualEntryVisible = true;
+    renderPronunciationCoach();
+    return;
+  }
+  recognition.lang = getSpeechLanguageCode('english');
+  recognition.interimResults = false;
+  recognition.maxAlternatives = 1;
+  let receivedResult = false;
+  pronunciationCoachRecognition = recognition;
+  pronunciationCoachMessage = 'Đang nghe. Hãy đọc từ một lần, rõ ràng.';
+  renderPronunciationCoach();
+
+  const finishWithError = (reason, recognitionEnded = false) => {
+    if (runId !== pronunciationCoachRunId || !pronunciationCoach?.snapshot().active) {
+      return;
+    }
+    clearPronunciationCoachRecognition(!recognitionEnded);
+    pronunciationCoach.reportError(reason);
+    pronunciationCoachMessage = getPronunciationCoachErrorMessage(reason);
+    isPronunciationCoachManualEntryVisible = true;
+    renderPronunciationCoach();
+  };
+
+  recognition.onresult = (event) => {
+    if (runId !== pronunciationCoachRunId || pronunciationCoachRecognition !== recognition) {
+      return;
+    }
+    const transcript = Array.from(event.results || [])
+      .map((result) => result[0]?.transcript || '')
+      .join(' ')
+      .trim();
+    if (!transcript) {
+      finishWithError('no-speech', true);
+      return;
+    }
+    receivedResult = true;
+    clearPronunciationCoachRecognition();
+    finishPronunciationCoachTranscript(transcript);
+  };
+  recognition.onerror = (event) => {
+    if (event?.error === 'aborted' && runId !== pronunciationCoachRunId) {
+      return;
+    }
+    finishWithError(event?.error || 'unknown');
+  };
+  recognition.onend = () => {
+    if (!receivedResult && runId === pronunciationCoachRunId && pronunciationCoachRecognition === recognition) {
+      finishWithError('no-speech');
+    }
+  };
+
+  pronunciationCoachTimeout = window.setTimeout(() => {
+    finishWithError('no-speech');
+  }, SPEECH_RECOGNITION_TIMEOUT);
+
+  try {
+    recognition.start();
+  } catch (error) {
+    console.error('Pronunciation coach recognition failed to start', error);
+    finishWithError(error?.name === 'NotAllowedError' ? 'not-allowed' : 'unknown');
+  }
+}
+
+function startPronunciationCoachSession(words) {
+  if (getCurrentLanguage() !== 'english') {
+    testFeedback.textContent = 'Pronunciation Coach hiện chỉ hỗ trợ bộ từ tiếng Anh.';
+    return;
+  }
+  pronunciationCoach = createPronunciationCoachSession(words, testTopicFilter.value, testSubtopicFilter.value);
+  if (!pronunciationCoach.start()) {
+    testFeedback.textContent = 'Không có từ để luyện theo bộ lọc hiện tại.';
+    return;
+  }
+
+  isPronunciationCoachWordHidden = true;
+  isPronunciationCoachManualEntryVisible = false;
+  pronunciationCoachTranscript.value = '';
+  pronunciationCoachMessage = 'Bắt đầu buổi luyện. Transcript chỉ dùng đối chiếu từ, không phải điểm phát âm.';
+  testTopicFilter.disabled = true;
+  testSubtopicFilter.disabled = true;
+  testSession.classList.add('hidden');
+  testSummary.classList.add('hidden');
+  pronunciationCoachSessionElement.classList.remove('hidden');
+  renderPronunciationCoach();
+  playPronunciationCoachWord();
+}
+
+function endPronunciationCoachSession() {
+  cancelPronunciationCoachActivities();
+  if (pronunciationCoach) {
+    pronunciationCoach.stop();
+    pronunciationCoach = null;
+  }
+  testTopicFilter.disabled = false;
+  testSubtopicFilter.disabled = false;
+  pronunciationCoachSessionElement.classList.add('hidden');
+}
+
+function togglePronunciationCoachPause() {
+  if (!pronunciationCoach) {
+    return;
+  }
+  cancelPronunciationCoachActivities();
+  pronunciationCoach.pause();
+  pronunciationCoachMessage = 'Buổi luyện đã tạm dừng. Khi tiếp tục, micro sẽ không tự bật lại.';
+  renderPronunciationCoach();
+}
+
+function resumePronunciationCoach() {
+  if (!pronunciationCoach?.resume()) {
+    return;
+  }
+  pronunciationCoachMessage = 'Đã tiếp tục. Nhấn nghe mẫu hoặc micro khi sẵn sàng.';
+  renderPronunciationCoach();
 }
 
 function stopVoiceRecognition() {
@@ -2452,6 +2880,21 @@ function updateTestProgress() {
   testProgress.style.width = `${progressPercent}%`;
 }
 
+function updateDictationWordVisibility() {
+  const isWordPrompt = selectedTestMode === 'dictation' && selectedDictationMode === 'word';
+  const currentEntry = testQueue[currentTestIndex];
+  const actionLabel = isDictationWordHidden ? 'Hiện từ vựng' : 'Ẩn từ vựng';
+
+  testWordVisibility.classList.toggle('hidden', !isWordPrompt);
+  testWordVisibility.setAttribute('aria-label', actionLabel);
+  testWordVisibility.setAttribute('title', actionLabel);
+  testWordVisibility.setAttribute('aria-pressed', String(isDictationWordHidden));
+  if (isWordPrompt && currentEntry) {
+    const prompt = getDictationPromptText('word', currentEntry);
+    testExample.textContent = `${getDictationPromptLabel('word')}: ${isDictationWordHidden ? '••••••' : prompt}`;
+  }
+}
+
 function showTestSummary() {
   cancelAutoNext();
   cancelSpeakingAutoNext();
@@ -2545,6 +2988,7 @@ function updateTestDisplay() {
     testTimeout(() => testAnswer.focus(), 120);
   }
 
+  updateDictationWordVisibility();
   updateTestProgress();
 }
 
@@ -2577,6 +3021,7 @@ function resetTestSession() {
   testWrong = 0;
   dictationWrongAttempts = 0;
   dictationStage = 'word';
+  isDictationWordHidden = false;
   testAnswer.value = '';
   testMessage.textContent = '';
   testRetry?.classList.add('hidden');
@@ -2593,6 +3038,7 @@ function resetTestSession() {
   testListen.classList.remove('hidden');
   testMeaning.textContent = '';
   testExample.textContent = '';
+  updateDictationWordVisibility();
   testInputLabel.textContent = 'Gõ từ';
   testModeLabel.textContent = '';
   testStageLabel.textContent = '';
@@ -3212,6 +3658,9 @@ function startLearnSession() {
 }
 
 function startTestSession() {
+  if (pronunciationCoach) {
+    endPronunciationCoachSession();
+  }
   cancelAutoNext();
   cancelSpeakingAutoNext();
   cleanupSpeechSession({ preservePending: false });
@@ -3226,6 +3675,12 @@ function startTestSession() {
     return;
   }
 
+  if (selectedTestMode === 'pronunciation-coach') {
+    sessionActive = false;
+    startPronunciationCoachSession(words);
+    return;
+  }
+
   testQueue = buildTestQueue(words);
   currentTestIndex = 0;
   isTestTransitioning = false;
@@ -3233,6 +3688,7 @@ function startTestSession() {
   testWrong = 0;
   dictationWrongAttempts = 0;
   dictationStage = 'word';
+  isDictationWordHidden = false;
   testFeedback.textContent = '';
   setTestSessionVisibility(true);
   updateTestDisplay();
@@ -3280,7 +3736,7 @@ function updateDuplicateStatus() {
         <p><strong>IPA:</strong> ${duplicateEntry.ipa || '—'}</p>
       </div>
     `;
-    duplicateCard.querySelector('#duplicate-view')?.addEventListener('click', () => scrollToWordCard(duplicateEntry.word));
+    duplicateCard.querySelector('#duplicate-view')?.addEventListener('click', () => showWordInList(duplicateEntry));
     duplicateCard.querySelector('#duplicate-edit')?.addEventListener('click', () => {
       startEditMode(duplicateEntry);
       showPage('add');
@@ -3308,17 +3764,43 @@ function getVocabularySnapshot() {
 function scrollToWordCard(word) {
   const targetCard = Array.from(wordList.querySelectorAll('.word-item')).find((card) => normalizeWordKey(card.dataset.word) === normalizeWordKey(word));
   if (!targetCard) {
-    return;
+    return null;
   }
 
   targetCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
-  targetCard.classList.add('is-highlighted');
-  if (duplicateHighlightTimer) {
-    window.clearTimeout(duplicateHighlightTimer);
+  return targetCard;
+}
+
+function showWordInList(entry) {
+  if (filterTopicSelect) {
+    refreshFilterControls();
+    filterTopicSelect.value = entry.topic || ALL_FILTER_VALUE;
+    updateVocabFilterSubtopics();
+    filterSubtopicSelect.value = entry.subTopic || ALL_FILTER_VALUE;
   }
-  duplicateHighlightTimer = window.setTimeout(() => {
-    targetCard.classList.remove('is-highlighted');
-  }, 2400);
+
+  if (filterTypeSelect) {
+    filterTypeSelect.value = ALL_FILTER_VALUE;
+  }
+  if (filterStatusSelect) {
+    filterStatusSelect.value = ALL_FILTER_VALUE;
+  }
+
+  void renderWordList();
+  requestAnimationFrame(() => {
+    const targetCard = scrollToWordCard(entry.word);
+    if (!targetCard) {
+      return;
+    }
+
+    targetCard.classList.add('is-highlighted');
+    if (duplicateHighlightTimer) {
+      window.clearTimeout(duplicateHighlightTimer);
+    }
+    duplicateHighlightTimer = window.setTimeout(() => {
+      targetCard.classList.remove('is-highlighted');
+    }, 2400);
+  });
 }
 
 function renderWordSuggestions() {
@@ -3411,7 +3893,7 @@ function startEditMode(entry) {
 // ===== AI EXPANSION PIPELINE =====
 
 function getAIExpansionContext() {
-  const word = inputWord?.value?.trim() || '';
+  let word = inputWord?.value?.trim() || '';
   return {
     word,
     meaning: inputMeaning?.value?.trim() || '',
@@ -3823,10 +4305,19 @@ function bindEvents() {
     event.preventDefault();
     const isQuickMode = addForm.dataset.entryMode === 'quick';
     const wasEditing = Boolean(editingWord);
-    const word = inputWord?.value?.trim() || '';
+    let word = inputWord?.value?.trim() || '';
     const englishDefinition = inputMeaning?.value?.trim() || '';
     const vietnameseMeaning = inputVietnameseMeaning?.value?.trim() || '';
-    const partOfSpeech = inputPartOfSpeech?.value?.trim() || '';
+    let partOfSpeech = inputPartOfSpeech?.value?.trim() || '';
+    const wordAndPartOfSpeech = normalizeWordAndPartOfSpeech(word, partOfSpeech);
+    word = wordAndPartOfSpeech.word;
+    partOfSpeech = wordAndPartOfSpeech.partOfSpeech;
+    if (inputWord && word !== inputWord.value.trim()) {
+      inputWord.value = word;
+    }
+    if (inputPartOfSpeech && partOfSpeech !== inputPartOfSpeech.value.trim()) {
+      inputPartOfSpeech.value = partOfSpeech;
+    }
     const existingEntry = editingWord ? vocabulary.find((item) => normalizeWordKey(item.word) === normalizeWordKey(editingWord)) : null;
     const existingMeanings = existingEntry?.meanings || {};
     let meanings = buildMeaningMap(existingMeanings, 'english', englishDefinition);
@@ -4226,6 +4717,9 @@ function bindEvents() {
   });
 
   languageSelect?.addEventListener('change', async () => {
+    if (pronunciationCoach) {
+      endPronunciationCoachSession();
+    }
     setCurrentLanguage(languageSelect.value);
     renderLanguageSelector();
     updateDynamicLabels();
@@ -4285,7 +4779,93 @@ function bindEvents() {
 
   testModeSpeaking.addEventListener('click', () => setSelectedTestMode('speaking'));
   testModeDictation.addEventListener('click', () => setSelectedTestMode('dictation'));
+  testModePronunciationCoach.addEventListener('click', () => setSelectedTestMode('pronunciation-coach'));
   testStart.addEventListener('click', startTestSession);
+  pronunciationCoachToggleWord.addEventListener('click', () => {
+    isPronunciationCoachWordHidden = !isPronunciationCoachWordHidden;
+    renderPronunciationCoach();
+  });
+  pronunciationCoachListen.addEventListener('click', () => playPronunciationCoachWord());
+  pronunciationCoachListenSlow.addEventListener('click', () => playPronunciationCoachWord(0.4));
+  pronunciationCoachRecord.addEventListener('click', startPronunciationCoachRecording);
+  pronunciationCoachStopRecord.addEventListener('click', () => {
+    if (pronunciationCoachRecognition) {
+      try {
+        pronunciationCoachRecognition.stop();
+        pronunciationCoachMessage = 'Đang hoàn tất nhận diện...';
+        renderPronunciationCoach();
+      } catch (error) {
+        console.error('Failed to stop pronunciation coach recognition', error);
+        clearPronunciationCoachRecognition();
+        pronunciationCoach.reportError('unknown');
+        pronunciationCoachMessage = getPronunciationCoachErrorMessage('unknown');
+        renderPronunciationCoach();
+      }
+    }
+  });
+  pronunciationCoachShowManual.addEventListener('click', () => {
+    isPronunciationCoachManualEntryVisible = !isPronunciationCoachManualEntryVisible;
+    renderPronunciationCoach();
+    if (isPronunciationCoachManualEntryVisible) {
+      pronunciationCoachTranscript.focus();
+    }
+  });
+  pronunciationCoachCheckTranscript.addEventListener('click', () => {
+    const expected = pronunciationCoach?.snapshot().currentWord?.word || '';
+    if (!expected || !pronunciationCoachTranscript.value.trim()) {
+      pronunciationCoachMessage = 'Nhập transcript trước khi đối chiếu.';
+      renderPronunciationCoach();
+      return;
+    }
+    const matches = normalizeText(pronunciationCoachTranscript.value) === normalizeText(expected);
+    pronunciationCoachMessage = matches
+      ? 'Nội dung chữ trùng khớp. Đây không phải bằng chứng phát âm đúng; hãy thử lại bằng micro hoặc bỏ qua từ.'
+      : 'Nội dung chữ chưa trùng. Việc nhập chữ không đánh giá được phát âm.';
+    renderPronunciationCoach();
+  });
+  pronunciationCoachSyllableYes.addEventListener('click', () => {
+    pronunciationCoach?.chooseSyllablePractice();
+    pronunciationCoachMessage = 'Chưa có dữ liệu chia âm tiết đáng tin cậy cho từ này. Đang phát chậm toàn từ thay vì tự chia âm.';
+    playPronunciationCoachWord(0.4);
+  });
+  pronunciationCoachSyllableNo.addEventListener('click', () => {
+    pronunciationCoach?.chooseSyllablePractice();
+    pronunciationCoachMessage = 'Bạn có thể nghe lại mẫu hoặc thử đọc lại toàn từ.';
+    playPronunciationCoachWord();
+  });
+  pronunciationCoachSkip.addEventListener('click', () => {
+    if (!pronunciationCoach?.snapshot().active) {
+      return;
+    }
+    cancelPronunciationCoachActivities();
+    pronunciationCoach.skip();
+    pronunciationCoachMessage = pronunciationCoach.snapshot().active
+      ? 'Đã bỏ qua từ này. Đang chuyển sang từ tiếp theo.'
+      : 'Buổi luyện kết thúc. Các từ đã bỏ qua không được tính là phát âm đạt.';
+    renderPronunciationCoach();
+    if (pronunciationCoach.snapshot().active) {
+      schedulePronunciationCoachNextWord();
+    }
+  });
+  pronunciationCoachPause.addEventListener('click', togglePronunciationCoachPause);
+  pronunciationCoachResume.addEventListener('click', resumePronunciationCoach);
+  pronunciationCoachEnd.addEventListener('click', endPronunciationCoachSession);
+  document.addEventListener('visibilitychange', () => {
+    if (
+      document.hidden
+      && pronunciationCoach?.snapshot().active
+      && pronunciationCoach.snapshot().state !== PRONUNCIATION_COACH_STATES.PAUSED
+    ) {
+      togglePronunciationCoachPause();
+    }
+  });
+  testWordVisibility.addEventListener('click', () => {
+    if (selectedTestMode !== 'dictation' || selectedDictationMode !== 'word') {
+      return;
+    }
+    isDictationWordHidden = !isDictationWordHidden;
+    updateDictationWordVisibility();
+  });
   testListen.addEventListener('click', processTestListening);
   testRecord.addEventListener('click', processTestRecording);
   testSubmit.addEventListener('click', processTestSubmission);

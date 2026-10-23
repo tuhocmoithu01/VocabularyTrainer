@@ -914,6 +914,51 @@ textarea {
   font-size: 0.95rem;
 }
 
+.test-prompt-content {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+#test-example {
+  margin: 0;
+}
+
+.test-word-visibility-button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  min-height: 44px;
+  padding: 8px;
+  border: 1px solid rgba(100, 116, 139, 0.24);
+  border-radius: 12px;
+  background: var(--surface-strong);
+  color: var(--text);
+  font-size: 1.2rem;
+  cursor: pointer;
+}
+
+.test-word-visibility-button:hover {
+  background: rgba(37, 99, 235, 0.08);
+}
+
+.test-word-visibility-button:focus-visible {
+  outline: 2px solid rgba(37, 99, 235, 0.6);
+  outline-offset: 2px;
+}
+
+.test-word-visibility-button[aria-pressed="true"]::after {
+  position: absolute;
+  width: 28px;
+  height: 2px;
+  background: currentColor;
+  content: "";
+  transform: rotate(-45deg);
+}
+
 .word-value {
   font-size: 1.6rem;
   font-weight: 700;
@@ -1014,6 +1059,89 @@ textarea {
   border: 1px solid var(--border);
   border-radius: 18px;
   background: linear-gradient(180deg, #fafbff, #f0f4ff);
+}
+
+.pronunciation-coach-session {
+  margin-top: 16px;
+}
+
+.pronunciation-coach-card {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: clamp(20px, 5vw, 36px);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  text-align: center;
+}
+
+.pronunciation-coach-word-row {
+  display: flex;
+  min-height: 72px;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+
+.pronunciation-coach-word-row .word-value {
+  margin: 0;
+  font-size: clamp(1.8rem, 7vw, 3rem);
+  overflow-wrap: anywhere;
+}
+
+.pronunciation-coach-ipa {
+  margin: 8px 0;
+  color: var(--primary);
+  font-size: 1.1rem;
+}
+
+.pronunciation-coach-meaning {
+  min-height: 1.5em;
+  color: var(--muted);
+}
+
+.pronunciation-coach-privacy {
+  max-width: 620px;
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.pronunciation-coach-status {
+  margin: 18px auto 8px;
+}
+
+.pronunciation-coach-choice {
+  margin: 20px 0;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface-strong);
+}
+
+.pronunciation-coach-actions {
+  justify-content: center;
+  margin-top: 22px;
+}
+
+.pronunciation-coach-actions button {
+  min-height: 48px;
+}
+
+.pronunciation-coach-manual-entry {
+  margin-top: 16px;
+  text-align: left;
+}
+
+@media (max-width: 640px) {
+  .pronunciation-coach-card {
+    padding: 18px;
+  }
+
+  .pronunciation-coach-word-row {
+    align-items: flex-start;
+  }
 }
 
 .mouth-animation-container {

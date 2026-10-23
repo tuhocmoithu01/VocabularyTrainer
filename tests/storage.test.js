@@ -3,9 +3,14 @@ import assert from 'node:assert/strict';
 import {
   createVocabularyEntry,
   DEFAULT_TYPE,
+  addVocabularyEntry,
   initializeOfflineCache,
+  filterVocabularyByTopic,
+  findDuplicateVocabularyEntry,
+  loadTopics,
   loadSubTopics,
   loadVocabulary,
+  mergeVocabularyCategories,
   saveSubTopics,
   updateVocabularyEntryByWord,
 } from '../storage.js';
@@ -40,6 +45,73 @@ test('initializeOfflineCache hydrates Test filters before Firestore responds', (
       globalThis.window = originalWindow;
     }
   }
+});
+
+test('topic and subtopic filters include vocabulary missing from saved preferences', () => {
+  const originalWindow = globalThis.window;
+  const originalLanguage = getCurrentLanguage();
+  const values = new Map([
+    ['vocabularyTrainer.vocabulary.english', JSON.stringify([
+      { word: 'assess', topic: 'Work', subTopic: 'Assessment' },
+      { word: 'interview', topic: 'Work', subTopic: 'Interview' },
+      { word: 'competence (n)', topic: '700+ part 1: Job Application & Interview', subTopic: 'Competence' },
+    ])],
+    ['vocabularyTrainer.preferences.english', JSON.stringify({
+      topics: ['General'],
+      subTopics: ['Work::Assessment'],
+      soundEnabled: true,
+    })],
+  ]);
+  globalThis.window = {
+    localStorage: {
+      getItem: (key) => values.get(key) || null,
+      setItem: (key, value) => values.set(key, value),
+    },
+  };
+
+  try {
+    setCurrentLanguage('english');
+    initializeOfflineCache('english');
+
+    assert.deepEqual(loadTopics(), ['General', '700+ part 1: Job Application & Interview', 'Work']);
+    assert.deepEqual(loadSubTopics(), ['Assessment', 'Competence', 'Interview']);
+    assert.deepEqual(loadSubTopics('Work'), ['Assessment', 'Interview']);
+    assert.deepEqual(
+      filterVocabularyByTopic(loadVocabulary(), '700+ part 1: Job Application & Interview', 'Competence')
+        .map((entry) => entry.word),
+      ['competence'],
+    );
+    assert.equal(
+      findDuplicateVocabularyEntry(loadVocabulary(), 'COMPETENCE (N)')?.subTopic,
+      'Competence',
+    );
+  } finally {
+    setCurrentLanguage(originalLanguage);
+    initializeOfflineCache(originalLanguage);
+    if (originalWindow === undefined) {
+      delete globalThis.window;
+    } else {
+      globalThis.window = originalWindow;
+    }
+  }
+});
+
+test('mergeVocabularyCategories adds missing categories without removing saved preferences', () => {
+  const result = mergeVocabularyCategories(
+    [
+      { topic: '700+ part 1: Job Application & Interview', subTopic: 'Competence' },
+      { topic: 'Work', subTopic: 'Assessment' },
+    ],
+    ['General', 'Work'],
+    ['Work::Assessment', 'Old topic::Old subtopic'],
+  );
+
+  assert.deepEqual(result.topics, ['General', 'Work', '700+ part 1: Job Application & Interview']);
+  assert.deepEqual(result.subTopics, [
+    'Work::Assessment',
+    'Old topic::Old subtopic',
+    '700+ part 1: Job Application & Interview::Competence',
+  ]);
 });
 
 test('switching languages retains the previous offline vocabulary cache', () => {
@@ -92,6 +164,60 @@ test('createVocabularyEntry defaults the type to Word when none provided', () =>
   assert.equal(entry.type, DEFAULT_TYPE);
   assert.equal(entry.word, 'learn');
   assert.equal(entry.topic, 'Education');
+});
+
+test('createVocabularyEntry moves recognized POS suffixes into the part-of-speech field', () => {
+  const entry = createVocabularyEntry(
+    'competence (n)',
+    '',
+    '',
+    '',
+    'Work',
+    'Assessment',
+    'Phrase',
+  );
+
+  assert.equal(entry.word, 'competence');
+  assert.equal(entry.partOfSpeech, 'noun');
+  assert.equal(entry.type, 'Word');
+  assert.equal(createVocabularyEntry('curriculum vitae (CV)', '').word, 'curriculum vitae (CV)');
+});
+
+test('addVocabularyEntry preserves slashes in words while using a Firestore-safe document id', async () => {
+  const originalWindow = globalThis.window;
+  const originalLanguage = getCurrentLanguage();
+  const values = new Map();
+  globalThis.window = {
+    localStorage: {
+      getItem: (key) => values.get(key) || null,
+      setItem: (key, value) => values.set(key, value),
+    },
+    dispatchEvent: () => {},
+  };
+
+  try {
+    setCurrentLanguage('english');
+    initializeOfflineCache('english');
+    const word = 'proficient (in sth/at doing sth)';
+    await addVocabularyEntry({
+      word,
+      meaning: 'thành thạo trong một lĩnh vực/kỹ năng',
+      topic: 'Skills',
+      subTopic: 'Job Application & Interview',
+    });
+
+    const savedEntry = loadVocabulary().find((entry) => entry.word === word);
+    assert.ok(savedEntry);
+    assert.equal(savedEntry.docId, 'proficient%20(in%20sth%2Fat%20doing%20sth)');
+  } finally {
+    setCurrentLanguage(originalLanguage);
+    initializeOfflineCache(originalLanguage);
+    if (originalWindow === undefined) {
+      delete globalThis.window;
+    } else {
+      globalThis.window = originalWindow;
+    }
+  }
 });
 
 test('createVocabularyEntry preserves support data as object arrays', () => {
