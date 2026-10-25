@@ -12,6 +12,7 @@ import {
   loadVocabulary,
   mergeVocabularyCategories,
   saveSubTopics,
+  toFirestorePayload,
   updateVocabularyEntryByWord,
 } from '../storage.js';
 import { getCurrentLanguage, getLanguageOptions, setCurrentLanguage } from '../language-manager.js';
@@ -166,6 +167,30 @@ test('createVocabularyEntry defaults the type to Word when none provided', () =>
   assert.equal(entry.topic, 'Education');
 });
 
+test('Firestore vocabulary payload preserves UK and US pronunciation metadata', () => {
+  const entry = createVocabularyEntry('competence', '', '', '');
+  const payload = toFirestorePayload({
+    ...entry,
+    ipaUK: '/ˈkɒm.pə.təns/',
+    ipaUS: '/ˈkɑm.pə.təns/',
+    pronunciationAudioUK: 'https://example.test/uk.wav',
+    pronunciationAudioUS: 'https://example.test/us.wav',
+    pronunciationAudioSourceUK: 'https://example.test/uk-source',
+    pronunciationAudioSourceUS: 'https://example.test/us-source',
+    pronunciationSourceUrl: 'https://en.wiktionary.org/wiki/competence',
+    pronunciationCheckedAt: '2026-10-25T00:00:00.000Z',
+  });
+
+  assert.equal(payload.ipaUK, '/ˈkɒm.pə.təns/');
+  assert.equal(payload.ipaUS, '/ˈkɑm.pə.təns/');
+  assert.equal(payload.pronunciationAudioUK, 'https://example.test/uk.wav');
+  assert.equal(payload.pronunciationAudioUS, 'https://example.test/us.wav');
+  assert.equal(payload.pronunciationAudioSourceUK, 'https://example.test/uk-source');
+  assert.equal(payload.pronunciationAudioSourceUS, 'https://example.test/us-source');
+  assert.equal(payload.pronunciationSourceUrl, 'https://en.wiktionary.org/wiki/competence');
+  assert.equal(payload.pronunciationCheckedAt, '2026-10-25T00:00:00.000Z');
+});
+
 test('createVocabularyEntry moves recognized POS suffixes into the part-of-speech field', () => {
   const entry = createVocabularyEntry(
     'competence (n)',
@@ -204,11 +229,23 @@ test('addVocabularyEntry preserves slashes in words while using a Firestore-safe
       meaning: 'thành thạo trong một lĩnh vực/kỹ năng',
       topic: 'Skills',
       subTopic: 'Job Application & Interview',
+      ipaUK: '/prəˈfɪʃənt/',
+      ipaUS: '/prəˈfɪʃənt/',
+      pronunciationSourceUrl: 'https://en.wiktionary.org/wiki/proficient',
+      pronunciationCheckedAt: '2026-10-25T00:00:00.000Z',
     });
 
     const savedEntry = loadVocabulary().find((entry) => entry.word === word);
     assert.ok(savedEntry);
     assert.equal(savedEntry.docId, 'proficient%20(in%20sth%2Fat%20doing%20sth)');
+    assert.equal(savedEntry.ipaUK, '/prəˈfɪʃənt/');
+    assert.equal(savedEntry.ipaUS, '/prəˈfɪʃənt/');
+    assert.equal(savedEntry.pronunciationSourceUrl, 'https://en.wiktionary.org/wiki/proficient');
+
+    const renamedEntry = await updateVocabularyEntryByWord(word, { word: 'capable' });
+    assert.equal(renamedEntry.ipaUK, '');
+    assert.equal(renamedEntry.ipaUS, '');
+    assert.equal(renamedEntry.pronunciationCheckedAt, '');
   } finally {
     setCurrentLanguage(originalLanguage);
     initializeOfflineCache(originalLanguage);
@@ -310,8 +347,6 @@ test('createVocabularyEntry normalizes the compact Examples structure', () => {
   });
   assert.equal(entry.example, 'Please schedule the meeting.');
 });
-
-import { toFirestorePayload } from '../storage.js';
 
 test('toFirestorePayload preserves the canonical example and drops legacy example fields', () => {
   const entry = createVocabularyEntry(

@@ -37,77 +37,26 @@ const HIGHLIGHT_STATES = Object.freeze({
   COMPLETED: 'completed', // ✅ Đã đọc
 });
 
-function splitTextIntoTokens(text) {
+function splitTextIntoTokens(text, { ipa = false } = {}) {
   if (!text || typeof text !== 'string') return [];
 
   const trimmed = text.trim();
-  if (!trimmed.includes(' ')) {
-    const syllables = splitIntoSyllables(trimmed);
-    return syllables.map((syl, index) => ({
-      text: syl,
-      displayText: syl,
-      isLast: index === syllables.length - 1,
-      index,
-    }));
-  }
-
-  const words = trimmed.split(/\s+/);
-  return words.map((word, index) => ({
-    text: word,
-    displayText: word,
-    isLast: index === words.length - 1,
+  if (!trimmed) return [];
+  const parts = ipa
+    ? splitIpaIntoSyllables(trimmed)
+    : trimmed.split(/\s+/);
+  return parts.map((part, index) => ({
+    text: part,
+    displayText: part,
+    isLast: index === parts.length - 1,
     index,
   }));
 }
 
-function splitIntoSyllables(word) {
-  if (!word) return [];
-
-  const cleaned = word.replace(/[^a-zA-Z]/g, '');
-  if (!cleaned) return [word];
-
-  const lower = cleaned.toLowerCase();
-  const customMap = {
-    architect: ['Ar', 'chi', 'tect'],
-    architects: ['Ar', 'chi', 'tects'],
-    decorate: ['dec', 'o', 'rate'],
-  };
-
-  if (customMap[lower]) {
-    return customMap[lower];
-  }
-
-  const vowels = 'aeiouAEIOU';
-  const syllables = [];
-  let current = '';
-
-  for (let i = 0; i < cleaned.length; i++) {
-    current += cleaned[i];
-
-    if (i < cleaned.length - 1) {
-      const isCurrentVowel = vowels.includes(cleaned[i]);
-      const isNextVowel = vowels.includes(cleaned[i + 1]);
-
-      if (isCurrentVowel && !isNextVowel && i > 0) {
-        let consonantCount = 0;
-        for (let j = i + 1; j < cleaned.length && !vowels.includes(cleaned[j]); j++) {
-          consonantCount++;
-        }
-        if (consonantCount > 0 && i + consonantCount + 1 < cleaned.length && vowels.includes(cleaned[i + consonantCount + 1])) {
-          if (current.length > 1) {
-            syllables.push(current);
-            current = '';
-          }
-        }
-      }
-    }
-  }
-
-  if (current) {
-    syllables.push(current);
-  }
-
-  return syllables.length ? syllables : [word];
+function splitIpaIntoSyllables(ipa) {
+  const transcription = ipa.replace(/^[\/\[]|[\/\]]$/g, '').trim();
+  const syllables = transcription.split(/[.·]/u).map((part) => part.trim()).filter(Boolean);
+  return syllables.length ? syllables : [transcription];
 }
 
 function createWordProgressRenderer(container, opts = {}) {
@@ -133,9 +82,9 @@ function createWordProgressRenderer(container, opts = {}) {
     timelineDuration = 0;
   }
 
-  function setText(text) {
+  function setText(text, options) {
     stopAnimation();
-    tokens = splitTextIntoTokens(text);
+    tokens = splitTextIntoTokens(text, options);
     activeIndex = -1;
     timelineActiveIndex = -1;
     timelineProgress = 0;
@@ -240,7 +189,12 @@ function createWordProgressRenderer(container, opts = {}) {
       }
 
       const separator = token.isLast ? '' : '<span class="word-separator">·</span>';
-      return `<span class="word-progress-token ${stateClass}">${token.text}</span>${separator}`;
+      const safeText = token.text.replace(/[&<>]/g, (character) => ({
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+      })[character]);
+      return `<span class="word-progress-token ${stateClass}">${safeText}</span>${separator}`;
     }).join('');
 
     container.innerHTML = html;
@@ -325,6 +279,6 @@ export {
   createMouthRenderer,
   createWordProgressRenderer,
   splitTextIntoTokens,
-  splitIntoSyllables,
+  splitIpaIntoSyllables,
   HIGHLIGHT_STATES,
 };

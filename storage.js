@@ -432,6 +432,14 @@ function normalizeVocabularyEntry(entry = {}, language = activeLanguage) {
     meaning: legacyMeaningValue,
     example: exampleValue,
     ipa: entry?.ipa ? String(entry.ipa).trim() : '',
+    ipaUK: String(entry?.ipaUK || '').trim(),
+    ipaUS: String(entry?.ipaUS || '').trim(),
+    pronunciationAudioUK: String(entry?.pronunciationAudioUK || '').trim(),
+    pronunciationAudioUS: String(entry?.pronunciationAudioUS || '').trim(),
+    pronunciationAudioSourceUK: String(entry?.pronunciationAudioSourceUK || '').trim(),
+    pronunciationAudioSourceUS: String(entry?.pronunciationAudioSourceUS || '').trim(),
+    pronunciationSourceUrl: String(entry?.pronunciationSourceUrl || '').trim(),
+    pronunciationCheckedAt: String(entry?.pronunciationCheckedAt || '').trim(),
     synonyms,
     antonyms,
     wordFamily,
@@ -485,6 +493,14 @@ export function toFirestorePayload(entry) {
     meaning: entry.meaning || entry.meanings?.vietnamese || entry.meanings?.vi || entry.meanings?.english || '',
     example: exampleValue,
     ipa: entry.ipa,
+    ipaUK: String(entry.ipaUK || '').trim(),
+    ipaUS: String(entry.ipaUS || '').trim(),
+    pronunciationAudioUK: String(entry.pronunciationAudioUK || '').trim(),
+    pronunciationAudioUS: String(entry.pronunciationAudioUS || '').trim(),
+    pronunciationAudioSourceUK: String(entry.pronunciationAudioSourceUK || '').trim(),
+    pronunciationAudioSourceUS: String(entry.pronunciationAudioSourceUS || '').trim(),
+    pronunciationSourceUrl: String(entry.pronunciationSourceUrl || '').trim(),
+    pronunciationCheckedAt: String(entry.pronunciationCheckedAt || '').trim(),
     synonyms: normalizeSupportObjectList(entry.synonyms),
     antonyms: normalizeSupportObjectList(entry.antonyms),
     wordFamily: normalizeSupportObjectList(entry.wordFamily),
@@ -1326,6 +1342,14 @@ export async function addVocabularyEntry(entry) {
     entry.meaningsAnalysis,
     entry.partOfSpeech,
   );
+  normalizedEntry.ipaUK = String(entry.ipaUK || '').trim();
+  normalizedEntry.ipaUS = String(entry.ipaUS || '').trim();
+  normalizedEntry.pronunciationAudioUK = String(entry.pronunciationAudioUK || '').trim();
+  normalizedEntry.pronunciationAudioUS = String(entry.pronunciationAudioUS || '').trim();
+  normalizedEntry.pronunciationAudioSourceUK = String(entry.pronunciationAudioSourceUK || '').trim();
+  normalizedEntry.pronunciationAudioSourceUS = String(entry.pronunciationAudioSourceUS || '').trim();
+  normalizedEntry.pronunciationSourceUrl = String(entry.pronunciationSourceUrl || '').trim();
+  normalizedEntry.pronunciationCheckedAt = String(entry.pronunciationCheckedAt || '').trim();
   console.log('DATA FLOW - addVocabularyEntry normalized:', normalizedEntry);
 
   if (!normalizedEntry.word) {
@@ -1372,8 +1396,20 @@ export async function updateVocabularyEntryByWord(originalWord, updates) {
   const updatedExamples = updates?.examples && typeof updates.examples === 'object' && !Array.isArray(updates.examples)
     ? updates.examples
     : {};
+  const isRenamingEntry = Boolean(nextWord && normalizeWordKey(nextWord) !== normalizedOriginalWord);
   const merged = {
     ...existing,
+    ...(isRenamingEntry ? {
+      ipa: '',
+      ipaUK: '',
+      ipaUS: '',
+      pronunciationAudioUK: '',
+      pronunciationAudioUS: '',
+      pronunciationAudioSourceUK: '',
+      pronunciationAudioSourceUS: '',
+      pronunciationSourceUrl: '',
+      pronunciationCheckedAt: '',
+    } : {}),
     ...updates,
     examples: { ...existingExamples, ...updatedExamples },
     word: nextWord || existing.word,

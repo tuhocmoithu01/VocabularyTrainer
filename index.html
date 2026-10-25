@@ -391,6 +391,7 @@
                 </select>
               </label>
               <div id="test-mode-hint" class="feedback">Chọn một chế độ rồi bắt đầu.</div>
+              <div id="pronunciation-backfill-status" class="feedback" aria-live="polite"></div>
               <button type="button" id="sound-toggle" class="secondary-button">🔊 Sound: ON</button>
             </div>
             <div class="form-actions">
@@ -419,6 +420,7 @@
           <!-- Pronunciation Visual Guide -->
           <div id="pronunciation-guide" class="pronunciation-guide hidden">
             <div id="mouth-animation-container" class="mouth-animation-container"></div>
+            <div id="pronunciation-variants" class="pronunciation-variants hidden" aria-live="polite"></div>
             <div id="word-progress-display" class="word-progress-display"></div>
           </div>
 
