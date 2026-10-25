@@ -29,7 +29,7 @@ import {
 } from './storage.js';
 import { getCurrentLanguage, getLanguageLabel, getLanguageOptions, setCurrentLanguage } from './language-manager.js';
 import { buildMeaningMap, getCurrentMeaningLanguage, getDisplayConfig, getMeaningDisplayValue, getMeaningLanguageOptions, getMeaningValue, setCurrentMeaningLanguage } from './language-config.js';
-import { fetchWordIpa, fetchWordSupportData, enrichSupportEntriesWithMeanings } from './dictionary.js';
+import { fetchWordPronunciationVariants, fetchWordSupportData, enrichSupportEntriesWithMeanings } from './dictionary.js';
 import {
   buildLearnQueue,
   formatLearnLabel,
@@ -286,6 +286,14 @@ const speakingTestFlow = createSpeakingTestFlowState();
 let pendingRecordingAfterPlayback = false;
 let activeSpeechPlaybackToken = 0;
 let activeSpeechSessionToken = 0;
+let activePronunciationLookupId = 0;
+const pronunciationBackfillQueue = new Map();
+const pronunciationQueuedWords = new Set();
+const pronunciationAttemptCooldown = new Map();
+let pronunciationBackfillRunning = false;
+let pronunciationBackfillTotal = 0;
+let pronunciationBackfillCompleted = 0;
+let pronunciationBackfillFailures = 0;
 let editingWord = null;
 let wordSuggestionItems = [];
 let activeSuggestionIndex = -1;
@@ -1918,6 +1926,9 @@ function renderWordCard(entry) {
   const antonyms = normalizeSupportList(entry.antonyms);
   const wordFamily = normalizeSupportList(entry.wordFamily);
   const fixedPhrases = normalizeSupportList(entry.fixedExpressions || entry.fixedPhrases);
+  const pronunciationDetails = entry.ipaUK || entry.ipaUS
+    ? `<p><strong>UK:</strong> ${escapeHtml(entry.ipaUK || '—')}</p><p><strong>US:</strong> ${escapeHtml(entry.ipaUS || '—')}</p>`
+    : `<p><strong>${config.pronunciationLabel}:</strong> ${escapeHtml(entry.ipa || entry.pronunciation || '—')}</p>`;
   return `
     <div class="word-item" data-word="${escapeHtml(entry.word)}" data-doc-id="${escapeHtml(entry.docId || '')}">
       <div>
@@ -1926,7 +1937,7 @@ function renderWordCard(entry) {
         <p><strong>Part of Speech:</strong> ${escapeHtml(entry.partOfSpeech || entry.pos || '—')}</p>
         <p><strong>Topic:</strong> ${escapeHtml(entry.topic)}</p>
         <p><strong>Sub Topic:</strong> ${escapeHtml(entry.subTopic)}</p>
-        <p><strong>${config.pronunciationLabel}:</strong> ${escapeHtml(entry.ipa || entry.pronunciation || '—')}</p>
+        ${pronunciationDetails}
         <p><strong>${config.meaningLabel}:</strong> ${escapeHtml(meaningValue)}</p>
         <p class="word-example"><strong>${config.exampleLabel}:</strong> ${escapeHtml(exampleValue || '—')}</p>
         <p><strong>Trạng thái:</strong> ${entry.learned ? 'Đã thuộc' : 'Chưa thuộc'}</p>
@@ -2445,7 +2456,10 @@ function renderPronunciationCoach() {
     pronunciationCoachWord.textContent = isPronunciationCoachWordHidden ? '••••••' : entry.word;
     pronunciationCoachToggleWord.setAttribute('aria-label', isPronunciationCoachWordHidden ? 'Hiện từ' : 'Ẩn từ');
     pronunciationCoachToggleWord.setAttribute('aria-pressed', String(!isPronunciationCoachWordHidden));
-    pronunciationCoachIpa.textContent = entry.ipa || entry.pronunciation || 'Chưa có IPA trong dữ liệu.';
+    pronunciationCoachIpa.textContent = [
+      entry.ipaUK ? `UK ${entry.ipaUK}` : '',
+      entry.ipaUS ? `US ${entry.ipaUS}` : '',
+    ].filter(Boolean).join(' · ') || entry.ipa || entry.pronunciation || 'Chưa có IPA trong dữ liệu.';
     const meaningMap = entry.meanings && typeof entry.meanings === 'object' ? entry.meanings : {};
     pronunciationCoachMeaning.textContent = meaningMap.vietnamese || meaningMap.vi || entry.meaning || '';
   } else {
@@ -2917,6 +2931,7 @@ function showTestSummary() {
 }
 
 function updateTestDisplay() {
+  activePronunciationLookupId += 1;
   cancelAutoNext();
   cancelSpeakingAutoNext();
   cleanupSpeechSession({ preservePending: false });
@@ -2954,8 +2969,7 @@ function updateTestDisplay() {
       testMessage.textContent = `Nhấn 🔊 Listen để nghe ${selectedSpeakingMode === 'example' ? 'câu ví dụ' : 'từ'} rồi bấm 🎤 Record để ghi âm.`;
     }
 
-    resetPronunciationForQuestion(promptText);
-    showPronunciationGuide(promptText);
+    updateSpeakingPronunciationGuide(currentEntry, selectedSpeakingMode, promptText);
     testNext.classList.toggle('hidden', currentTestIndex >= testQueue.length - 1);
     speakSpeakingPrompt(currentEntry);
   } else {
@@ -3007,6 +3021,7 @@ function resetLearnSession() {
 }
 
 function resetTestSession() {
+  activePronunciationLookupId += 1;
   cancelAutoNext();
   cancelSpeakingAutoNext();
   
@@ -3265,8 +3280,7 @@ function processTestListening(playbackRate = currentPlaybackRate) {
 
   if (selectedTestMode === 'speaking') {
     const promptText = getSpeakingPromptText(selectedSpeakingMode, entry);
-    resetPronunciationForQuestion(promptText);
-    showPronunciationGuide(promptText);
+    updateSpeakingPronunciationGuide(entry, selectedSpeakingMode, promptText);
     speakSpeakingPrompt(entry, playbackRate);
     testMessage.textContent = 'Đang phát âm...';
   } else if (selectedDictationMode === 'example') {
@@ -3349,14 +3363,25 @@ function processTestRecording() {
         : getSpeechRecognitionUnsupportedMessage();
       testRecord.textContent = '🎤 Record';
       testRecord.disabled = false;
-      onRecordingStop();
+      onRecordingStop({ processing: false });
       updateSpeechButtonState();
       console.error('Microphone access request was denied or unavailable.', { reason, error });
       return;
     }
 
-    const recognition = new SpeechRecognition();
-  let recordingFinished = false;
+    let recognition;
+    try {
+      recognition = new SpeechRecognition();
+    } catch (error) {
+      speechStateMachine.reset();
+      onRecordingStop({ processing: false });
+      testRecord.textContent = '🎤 Record';
+      testMessage.textContent = 'Không thể bắt đầu nhận diện giọng nói. Hãy thử lại.';
+      updateSpeechButtonState();
+      console.error('Speech recognition could not be created.', error);
+      return;
+    }
+    let recordingFinished = false;
     recognition.lang = getSpeechLanguageCode(getCurrentLanguage());
     recognition.interimResults = false;
     recognition.maxAlternatives = 1;
@@ -3442,7 +3467,7 @@ function processTestRecording() {
       const errorCode = event?.error || 'unknown';
       console.error('Speech recognition error', { errorCode, event });
       testMessage.textContent = getSpeechRecognitionErrorMessage(errorCode);
-      onRecordingStop();
+      onRecordingStop({ processing: false });
       testRecord.textContent = '🎤 Record';
       if (selectedTestMode === 'speaking') {
         handleSpeakingTestFailure();
@@ -3465,8 +3490,8 @@ function processTestRecording() {
         }
         testMessage.textContent = 'Không nghe thấy giọng nói. Hãy thử nói lại gần micro hơn.';
         handleSpeakingTestFailure();
+        onRecordingStop({ processing: false });
       }
-      onRecordingStop();
       speechStateMachine.reset();
       testRecord.textContent = '🎤 Record';
       updateSpeechButtonState();
@@ -3483,7 +3508,7 @@ function processTestRecording() {
       stopVoiceRecognition();
       speechStateMachine.reset();
       testRecord.textContent = '🎤 Record';
-      onRecordingStop();
+      onRecordingStop({ processing: false });
       updateSpeechButtonState();
     }, SPEECH_RECOGNITION_TIMEOUT);
     try {
@@ -3496,7 +3521,7 @@ function processTestRecording() {
       }
       stopVoiceRecognition();
       speechStateMachine.reset();
-      onRecordingStop();
+      onRecordingStop({ processing: false });
       testRecord.textContent = '🎤 Record';
       testMessage.textContent = 'Không thể bắt đầu nhận diện giọng nói. Hãy thử lại.';
       updateSpeechButtonState();
@@ -3563,6 +3588,344 @@ function processTestSubmission() {
       testAnswer.focus();
     }
     playWrongSound();
+  }
+}
+
+function updateSpeakingPronunciationGuide(entry, mode, promptText) {
+  const lookupId = ++activePronunciationLookupId;
+  const normalizedPrompt = String(promptText || '').trim().replace(/\s+/g, ' ');
+  const promptWords = (normalizedPrompt.match(/[A-Za-z]+(?:['’][A-Za-z]+)*/g) || [])
+    .map((word) => word.toLowerCase());
+  const savedPronunciations = mode === 'vocabulary' ? {
+    uk: entry.ipaUK ? {
+      ipa: entry.ipaUK,
+      audio: entry.pronunciationAudioUK || '',
+      audioSourceUrl: entry.pronunciationAudioSourceUK || '',
+    } : null,
+    us: entry.ipaUS ? {
+      ipa: entry.ipaUS,
+      audio: entry.pronunciationAudioUS || '',
+      audioSourceUrl: entry.pronunciationAudioSourceUS || '',
+    } : null,
+    sourceUrl: entry.pronunciationSourceUrl || '',
+  } : { uk: null, us: null, sourceUrl: '' };
+  const hasSavedPronunciation = Boolean(savedPronunciations.uk || savedPronunciations.us);
+  const initialPronunciations = {
+    ...savedPronunciations,
+    ...(promptWords.length > 1 ? {
+      components: promptWords.map((word) => ({
+        word,
+        uk: null,
+        us: null,
+        ...(navigator.onLine === false ? { lookupFailed: true } : { lookupPending: true }),
+      })),
+    } : {}),
+    message: hasSavedPronunciation
+      ? 'Đang kiểm tra phiên âm cho nội dung hiện tại…'
+      : navigator.onLine === false
+        ? 'Đang ngoại tuyến; không thể tra IPA UK/US.'
+        : 'Đang tra IPA UK/US…',
+  };
+  resetPronunciationForQuestion(normalizedPrompt, initialPronunciations);
+  showPronunciationGuide(normalizedPrompt, initialPronunciations);
+
+  if (!normalizedPrompt || navigator.onLine === false) {
+    return;
+  }
+  if (
+    mode === 'vocabulary'
+    && savedPronunciations.uk
+    && savedPronunciations.us
+  ) {
+    showPronunciationGuide(normalizedPrompt, { ...savedPronunciations, message: '' });
+    return;
+  }
+
+  void (async () => {
+    try {
+      const exact = await fetchWordPronunciationVariants(normalizedPrompt);
+      if (lookupId !== activePronunciationLookupId) {
+        return;
+      }
+
+      const exactPronunciations = {
+        uk: savedPronunciations.uk
+          ? {
+            ...exact.uk,
+            ...savedPronunciations.uk,
+            audio: savedPronunciations.uk.audio || exact.uk?.audio || '',
+            audioSourceUrl: savedPronunciations.uk.audioSourceUrl || exact.uk?.audioSourceUrl || '',
+          }
+          : exact.uk || null,
+        us: savedPronunciations.us
+          ? {
+            ...exact.us,
+            ...savedPronunciations.us,
+            audio: savedPronunciations.us.audio || exact.us?.audio || '',
+            audioSourceUrl: savedPronunciations.us.audioSourceUrl || exact.us?.audioSourceUrl || '',
+          }
+          : exact.us || null,
+        sourceUrl: exact.uk || exact.us ? exact.sourceUrl : savedPronunciations.sourceUrl,
+        message: '',
+      };
+      const accentCoverageMessage = exactPronunciations.uk && !exactPronunciations.us
+        ? 'Chỉ tìm thấy IPA UK; chưa có IPA US.'
+        : exactPronunciations.us && !exactPronunciations.uk
+          ? 'Chỉ tìm thấy IPA US; chưa có IPA UK.'
+          : '';
+      const needsComponents = promptWords.length > 1
+        && (!exactPronunciations.uk || !exactPronunciations.us);
+      if (!needsComponents) {
+        showPronunciationGuide(normalizedPrompt, {
+          ...exactPronunciations,
+          message: exactPronunciations.uk || exactPronunciations.us
+            ? accentCoverageMessage
+            : 'Không tìm thấy IPA UK/US cho nội dung này trong Wiktionary.',
+        });
+        return;
+      }
+
+      const components = promptWords.map((word) => ({
+        word,
+        uk: null,
+        us: null,
+        lookupPending: true,
+      }));
+      let componentFailures = false;
+      for (let start = 0; start < promptWords.length; start += 4) {
+        const end = Math.min(start + 4, promptWords.length);
+        const componentResults = await Promise.allSettled(
+          promptWords.slice(start, end).map(async (word) => ({
+            word,
+            ...(await fetchWordPronunciationVariants(word)),
+          })),
+        );
+        if (lookupId !== activePronunciationLookupId) {
+          return;
+        }
+        componentResults.forEach((result, index) => {
+          const componentIndex = start + index;
+          if (result.status === 'fulfilled') {
+            components[componentIndex] = result.value;
+          } else {
+            components[componentIndex] = {
+              word: promptWords[componentIndex],
+              uk: null,
+              us: null,
+              lookupFailed: true,
+            };
+            componentFailures = true;
+          }
+        });
+
+        const completed = end;
+        const componentsWithIpa = components.filter((component) => component.uk || component.us);
+        const message = exactPronunciations.uk || exactPronunciations.us
+          ? `IPA ở trên là của toàn cụm. ${accentCoverageMessage} Đang tra IPA từng từ (${completed}/${promptWords.length}).`
+          : `Đang tra IPA từng từ (${completed}/${promptWords.length}); kết quả bên dưới không phải IPA chính thức của cả cụm.`;
+        showPronunciationGuide(normalizedPrompt, {
+          ...exactPronunciations,
+          components,
+          message,
+        });
+
+        if (completed === promptWords.length) {
+          const finalMessage = exactPronunciations.uk || exactPronunciations.us
+            ? `IPA ở trên là của toàn cụm. ${accentCoverageMessage} Các mục bên dưới là IPA từng từ riêng lẻ.`
+            : componentsWithIpa.length
+              ? 'Không tìm thấy IPA chính thức của toàn cụm; các dòng bên dưới là IPA từng từ riêng lẻ. Từ chưa có phiên âm được ghi rõ.'
+              : componentFailures
+                ? 'Không thể kết nối nguồn từ điển để tra IPA từng từ.'
+                : 'Không tìm thấy IPA UK/US cho toàn cụm hoặc các từ thành phần.';
+          showPronunciationGuide(normalizedPrompt, {
+            ...exactPronunciations,
+            components,
+            message: finalMessage,
+          });
+        }
+      }
+    } catch (error) {
+      if (lookupId !== activePronunciationLookupId) {
+        return;
+      }
+      console.error(`Failed to load pronunciation for "${normalizedPrompt}"`, error);
+      showPronunciationGuide(normalizedPrompt, {
+        ...savedPronunciations,
+        message: error.message.includes('timed out')
+          ? 'Nguồn từ điển phản hồi quá lâu; hãy thử lại khi kết nối ổn định.'
+          : 'Không thể kết nối nguồn từ điển để tra IPA UK/US.',
+      });
+    }
+  })();
+}
+
+function isPronunciationLookupDue(entry, now = Date.now()) {
+  if (
+    !entry?.word
+    || /\s/.test(entry.word)
+    || entry.language && entry.language !== 'english'
+    || entry.ipaUK && entry.ipaUS
+  ) {
+    return false;
+  }
+
+  const checkedAt = Date.parse(entry.pronunciationCheckedAt || '');
+  const retryInterval = entry.ipaUK || entry.ipaUS
+    ? 30 * 24 * 60 * 60 * 1000
+    : 24 * 60 * 60 * 1000;
+  if (Number.isFinite(checkedAt) && now - checkedAt < retryInterval) {
+    return false;
+  }
+
+  const attemptedAt = pronunciationAttemptCooldown.get(normalizeWordKey(entry.word)) || 0;
+  return now - attemptedAt >= 60 * 60 * 1000;
+}
+
+function updatePronunciationBackfillStatus() {
+  const status = document.getElementById('pronunciation-backfill-status');
+  if (!status) {
+    return;
+  }
+
+  if (pronunciationBackfillRunning || pronunciationBackfillQueue.size) {
+    const total = Math.max(pronunciationBackfillTotal, pronunciationBackfillCompleted + pronunciationBackfillQueue.size);
+    status.textContent = navigator.onLine === false
+      ? `Mất kết nối mạng; đang chờ để tiếp tục tra phiên âm UK/US (${pronunciationBackfillCompleted}/${total}).`
+      : `Đang tra phiên âm UK/US: ${pronunciationBackfillCompleted}/${total} từ.`;
+    return;
+  }
+
+  const entries = loadVocabulary().filter((entry) => entry.language === 'english' && !/\s/.test(entry.word));
+  const ukCount = entries.filter((entry) => entry.ipaUK).length;
+  const usCount = entries.filter((entry) => entry.ipaUS).length;
+  const failureMessage = pronunciationBackfillFailures
+    ? ` Có ${pronunciationBackfillFailures} lượt tra lỗi; kiểm tra kết nối rồi tải lại để thử lại.`
+    : '';
+  status.textContent = entries.length
+    ? `Đã tra ${ukCount}/${entries.length} phiên âm UK và ${usCount}/${entries.length} phiên âm US. Nguồn: Wiktionary.${failureMessage}`
+    : '';
+}
+
+function schedulePronunciationBackfill(entries = loadVocabulary()) {
+  if (getCurrentLanguage() !== 'english' || !Array.isArray(entries)) {
+    return;
+  }
+
+  if (navigator.onLine === false) {
+    const status = document.getElementById('pronunciation-backfill-status');
+    if (status) {
+      status.textContent = 'Kết nối Internet để tự động tra phiên âm UK/US cho từ vựng.';
+    }
+    return;
+  }
+
+  entries.forEach((entry) => {
+    if (!isPronunciationLookupDue(entry)) {
+      return;
+    }
+    const key = normalizeWordKey(entry.word);
+    if (pronunciationQueuedWords.has(key)) {
+      return;
+    }
+    pronunciationQueuedWords.add(key);
+    pronunciationBackfillQueue.set(key, entry);
+  });
+
+  pronunciationBackfillTotal = Math.max(
+    pronunciationBackfillTotal,
+    pronunciationBackfillCompleted + pronunciationBackfillQueue.size,
+  );
+  updatePronunciationBackfillStatus();
+  if (pronunciationBackfillRunning || !pronunciationBackfillQueue.size) {
+    return;
+  }
+
+  pronunciationBackfillRunning = true;
+  void processPronunciationBackfillQueue();
+}
+
+async function processPronunciationBackfillQueue() {
+  try {
+    while (pronunciationBackfillQueue.size && getCurrentLanguage() === 'english') {
+      if (navigator.onLine === false) {
+        break;
+      }
+      const [key, queuedEntry] = pronunciationBackfillQueue.entries().next().value;
+      pronunciationBackfillQueue.delete(key);
+      const entry = findVocabularyEntry(queuedEntry.word) || queuedEntry;
+      if (!isPronunciationLookupDue(entry)) {
+        pronunciationQueuedWords.delete(key);
+        continue;
+      }
+
+      pronunciationAttemptCooldown.set(key, Date.now());
+      let lookupProcessed = false;
+      try {
+        const result = await fetchWordPronunciationVariants(entry.word);
+        if (getCurrentLanguage() !== 'english') {
+          pronunciationAttemptCooldown.delete(key);
+          pronunciationBackfillQueue.set(key, queuedEntry);
+          break;
+        }
+        const updated = await updateVocabularyEntryByWord(entry.word, {
+          ipa: entry.ipa || result.uk?.ipa || result.us?.ipa || '',
+          ...(result.uk?.ipa && !entry.ipaUK ? {
+            ipaUK: result.uk.ipa,
+          } : {}),
+          ...(result.uk?.audio && !entry.pronunciationAudioUK ? {
+            pronunciationAudioUK: result.uk.audio,
+            pronunciationAudioSourceUK: result.uk.audioSourceUrl,
+          } : {}),
+          ...(result.us?.ipa && !entry.ipaUS ? {
+            ipaUS: result.us.ipa,
+          } : {}),
+          ...(result.us?.audio && !entry.pronunciationAudioUS ? {
+            pronunciationAudioUS: result.us.audio,
+            pronunciationAudioSourceUS: result.us.audioSourceUrl,
+          } : {}),
+          ...(!entry.pronunciationSourceUrl && result.sourceUrl
+            ? { pronunciationSourceUrl: result.sourceUrl }
+            : {}),
+          pronunciationCheckedAt: new Date().toISOString(),
+        });
+        if (updated) {
+          pronunciationAttemptCooldown.set(
+            key,
+            Date.now() + (result.uk || result.us ? 30 : 1) * 24 * 60 * 60 * 1000,
+          );
+          if (
+            testQueue[currentTestIndex]?.word === updated.word
+            && selectedTestMode === 'speaking'
+            && selectedSpeakingMode === 'vocabulary'
+          ) {
+            const promptText = getSpeakingPromptText(selectedSpeakingMode, updated);
+            updateSpeakingPronunciationGuide(updated, selectedSpeakingMode, promptText);
+          }
+        }
+        lookupProcessed = true;
+      } catch (error) {
+        pronunciationBackfillFailures += 1;
+        if (navigator.onLine === false) {
+          pronunciationAttemptCooldown.delete(key);
+        }
+        lookupProcessed = true;
+        console.error(`Failed to load UK/US pronunciation for "${entry.word}"`, error);
+      } finally {
+        pronunciationQueuedWords.delete(key);
+        if (lookupProcessed) {
+          pronunciationBackfillCompleted += 1;
+        }
+        updatePronunciationBackfillStatus();
+      }
+
+      await new Promise((resolve) => window.setTimeout(resolve, 500));
+    }
+  } finally {
+    pronunciationBackfillRunning = false;
+    updatePronunciationBackfillStatus();
+    if (pronunciationBackfillQueue.size && getCurrentLanguage() === 'english') {
+      schedulePronunciationBackfill();
+    }
   }
 }
 
@@ -4322,7 +4685,9 @@ function bindEvents() {
     const existingMeanings = existingEntry?.meanings || {};
     let meanings = buildMeaningMap(existingMeanings, 'english', englishDefinition);
     meanings = buildMeaningMap(meanings, 'vietnamese', vietnameseMeaning);
-    let ipa = inputIpa?.value?.trim() || '';
+    let ipa = editingWord && normalizeWordKey(editingWord) !== normalizeWordKey(word)
+      ? ''
+      : inputIpa?.value?.trim() || '';
     const parsedSynonyms = normalizeSupportList(currentSupportSynonyms);
     const parsedAntonyms = normalizeSupportList(currentSupportAntonyms);
     const parsedWordFamily = normalizeSupportList(currentSupportWordFamily);
@@ -4380,10 +4745,6 @@ function bindEvents() {
         return;
       }
       subTopic = newSubTopic;
-    }
-
-    if (!isQuickMode && !ipa) {
-      ipa = await fetchWordIpa(word);
     }
 
     const duplicateEntry = findDuplicateVocabularyEntry(getVocabularySnapshot(), word, editingWord || '');
@@ -4928,8 +5289,7 @@ async function initializeApp() {
         const currentEntry = testQueue[currentTestIndex];
         if (currentEntry) {
           const promptText = getSpeakingPromptText(selectedSpeakingMode, currentEntry);
-          resetPronunciationForQuestion(promptText);
-          showPronunciationGuide(promptText);
+          updateSpeakingPronunciationGuide(currentEntry, selectedSpeakingMode, promptText);
           speakSpeakingPrompt(currentEntry, slowRate);
         }
       } else if (selectedTestMode === 'dictation') {
@@ -4940,7 +5300,7 @@ async function initializeApp() {
       if (testRecognition) {
         stopVoiceRecognition();
         speechStateMachine.reset();
-        onRecordingStop();
+        onRecordingStop({ processing: false });
         testRecord.textContent = '🎤 Record';
         testMessage.textContent = 'Đã dừng ghi âm.';
         updateSpeechButtonState();
@@ -4963,7 +5323,9 @@ async function initializeApp() {
   renderLanguageSelector();
   renderMeaningLanguageSelector();
   updateDynamicLabels();
-  window.addEventListener('vocabulary-storage-updated', () => {
+  window.addEventListener('online', () => schedulePronunciationBackfill());
+  window.addEventListener('vocabulary-storage-updated', (event) => {
+    schedulePronunciationBackfill(event.detail);
     // Preserve current topic and subtopic selections
     const currentTopic = inputTopic.value && inputTopic.value !== ADD_TOPIC_VALUE ? inputTopic.value : DEFAULT_TOPIC;
     const currentSubTopic = inputSubtopic.value && inputSubtopic.value !== SUBTOPIC_NOT_SELECTED_VALUE ? inputSubtopic.value : DEFAULT_SUBTOPIC;
@@ -4994,7 +5356,9 @@ async function initializeApp() {
   renderLearnSelection();
   renderTestState();
   void migrateLocalStorageToFirestore();
-  void ensureVocabularyLoaded();
+  void ensureVocabularyLoaded()
+    .then(schedulePronunciationBackfill)
+    .catch((error) => console.error('Failed to load vocabulary pronunciation backfill', error));
   void ensurePreferencesLoaded();
   void loadSoundSetting();
 }

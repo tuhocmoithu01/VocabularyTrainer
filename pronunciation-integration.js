@@ -16,6 +16,197 @@ let wordProgressRenderer = null;
 let isRecording = false;
 let currentTranscript = '';
 
+function normalizePronunciationVariants(value) {
+  if (!value || typeof value !== 'object') {
+    return { uk: null, us: null, components: [], sourceUrl: '', message: '' };
+  }
+  return {
+    uk: value.uk?.ipa ? value.uk : null,
+    us: value.us?.ipa ? value.us : null,
+    components: Array.isArray(value.components) ? value.components : [],
+    sourceUrl: String(value.sourceUrl || ''),
+    message: String(value.message || ''),
+  };
+}
+
+function setPronunciationPlaybackStatus(message) {
+  const container = document.getElementById('pronunciation-variants');
+  if (!container) {
+    return;
+  }
+  let status = container.querySelector('.pronunciation-playback-status');
+  if (!status) {
+    status = document.createElement('p');
+    status.className = 'pronunciation-variant-message pronunciation-playback-status';
+    container.appendChild(status);
+  }
+  status.textContent = message;
+}
+
+async function playPronunciationAudio(audioUrl, word, locale) {
+  if (audioUrl) {
+    const audio = new Audio(audioUrl);
+    try {
+      await audio.play();
+      return;
+    } catch (error) {
+      console.error(`Failed to play ${locale} pronunciation audio`, error);
+    }
+  }
+
+  if (!('speechSynthesis' in window) || typeof SpeechSynthesisUtterance === 'undefined') {
+    console.error(`No audio or speech synthesis is available for ${locale} pronunciation.`);
+    setPronunciationPlaybackStatus('Không có audio từ điển và trình duyệt không hỗ trợ đọc mẫu.');
+    return;
+  }
+
+  const utterance = new SpeechSynthesisUtterance(word);
+  utterance.lang = locale;
+  utterance.onerror = (error) => {
+    console.error(`Failed to synthesize ${locale} pronunciation`, error);
+    setPronunciationPlaybackStatus('Trình duyệt không thể phát âm mẫu này.');
+  };
+  const voice = window.speechSynthesis.getVoices().find((item) => item.lang?.toLowerCase() === locale.toLowerCase());
+  if (voice) {
+    utterance.voice = voice;
+  }
+  window.speechSynthesis.cancel();
+  window.speechSynthesis.speak(utterance);
+}
+
+function renderPronunciationVariants(text, pronunciations) {
+  const container = document.getElementById('pronunciation-variants');
+  const variants = normalizePronunciationVariants(pronunciations);
+  if (!container) {
+    return Boolean(variants.uk || variants.us);
+  }
+
+  container.replaceChildren();
+  const available = [
+    { key: 'uk', label: 'UK', locale: 'en-GB', pronunciation: variants.uk },
+    { key: 'us', label: 'US', locale: 'en-US', pronunciation: variants.us },
+  ].filter((item) => item.pronunciation);
+
+  if (variants.message) {
+    const message = document.createElement('p');
+    message.className = 'pronunciation-variant-message';
+    message.textContent = variants.message;
+    container.appendChild(message);
+  }
+
+  available.forEach(({ key, label, locale, pronunciation }) => {
+    const item = document.createElement('div');
+    item.className = 'pronunciation-variant';
+    item.dataset.accent = key;
+
+    const accentLabel = document.createElement('span');
+    accentLabel.className = 'pronunciation-variant-label';
+    accentLabel.textContent = label;
+
+    const transcription = document.createElement('span');
+    transcription.className = 'pronunciation-variant-ipa';
+    transcription.textContent = pronunciation.ipa;
+
+    const audioSource = pronunciation.audioSourceUrl ? document.createElement('a') : null;
+    if (audioSource) {
+      audioSource.className = 'pronunciation-variant-source';
+      audioSource.href = pronunciation.audioSourceUrl;
+      audioSource.target = '_blank';
+      audioSource.rel = 'noopener noreferrer';
+      audioSource.textContent = 'audio source';
+    }
+
+    const playButton = document.createElement('button');
+    playButton.type = 'button';
+    playButton.className = 'pronunciation-variant-play';
+    playButton.textContent = '🔊';
+    playButton.setAttribute('aria-label', `Nghe phiên âm ${label}`);
+    playButton.addEventListener('click', () => {
+      void playPronunciationAudio(pronunciation.audio, text, locale);
+    });
+
+    item.append(accentLabel, playButton, transcription);
+    if (audioSource) {
+      item.appendChild(audioSource);
+    }
+    container.appendChild(item);
+  });
+
+  variants.components.forEach((component) => {
+    const componentRow = document.createElement('div');
+    componentRow.className = 'pronunciation-component';
+    const word = document.createElement('strong');
+    word.textContent = component.word;
+    componentRow.appendChild(word);
+
+    [
+      { label: 'UK', locale: 'en-GB', pronunciation: component.uk },
+      { label: 'US', locale: 'en-US', pronunciation: component.us },
+    ].forEach(({ label, locale, pronunciation }) => {
+      if (!pronunciation) {
+        return;
+      }
+      const playButton = document.createElement('button');
+      playButton.type = 'button';
+      playButton.className = 'pronunciation-variant-play';
+      playButton.textContent = '🔊';
+      playButton.setAttribute('aria-label', `Nghe ${component.word} (${label})`);
+      playButton.addEventListener('click', () => {
+        void playPronunciationAudio(pronunciation.audio, component.word, locale);
+      });
+      const transcription = document.createElement('span');
+      transcription.className = 'pronunciation-variant-ipa';
+      transcription.textContent = `${label} ${pronunciation.ipa}`;
+      componentRow.append(playButton, transcription);
+      if (pronunciation.audioSourceUrl) {
+        const audioSource = document.createElement('a');
+        audioSource.className = 'pronunciation-variant-source';
+        audioSource.href = pronunciation.audioSourceUrl;
+        audioSource.target = '_blank';
+        audioSource.rel = 'noopener noreferrer';
+        audioSource.textContent = 'nguồn audio';
+        componentRow.appendChild(audioSource);
+      }
+    });
+    [
+      { label: 'UK', pronunciation: component.uk },
+      { label: 'US', pronunciation: component.us },
+    ].forEach(({ label, pronunciation }) => {
+      if (pronunciation) {
+        return;
+      }
+      const unavailable = document.createElement('span');
+      unavailable.className = 'pronunciation-variant-unavailable';
+      const status = component.lookupPending
+        ? 'Đang tra…'
+        : component.lookupFailed
+          ? 'Không tra được'
+          : 'Chưa có IPA';
+      unavailable.textContent = `${label}: ${status}`;
+      componentRow.appendChild(unavailable);
+    });
+    container.appendChild(componentRow);
+  });
+
+  if (variants.sourceUrl) {
+    const attribution = document.createElement('a');
+    attribution.className = 'pronunciation-source';
+    attribution.href = variants.sourceUrl;
+    attribution.target = '_blank';
+    attribution.rel = 'noopener noreferrer';
+    attribution.textContent = 'Nguồn: Wiktionary (CC BY-SA)';
+    container.appendChild(attribution);
+  }
+
+  if (!available.length && !variants.components.length && !variants.message) {
+    container.classList.add('hidden');
+    return false;
+  }
+
+  container.classList.remove('hidden');
+  return Boolean(available.length);
+}
+
 // DOM references (set during init)
 let dom = {};
 
@@ -84,14 +275,15 @@ export function initPronunciationUI(elements = {}) {
 /**
  * Show pronunciation guide (visual + word progress)
  */
-export function showPronunciationGuide(text) {
+export function showPronunciationGuide(text, pronunciations = {}) {
   const guide = document.getElementById('pronunciation-guide');
   if (guide) {
     guide.classList.remove('hidden');
   }
 
-  if (wordProgressRenderer && text) {
-    wordProgressRenderer.setText(text);
+  const hasVariants = renderPronunciationVariants(text, pronunciations);
+  if (wordProgressRenderer) {
+    wordProgressRenderer.setText(hasVariants ? '' : text);
   }
 
   if (mouthRenderer) {
@@ -179,11 +371,11 @@ export function onRecordingStart() {
 /**
  * Called when recording stops
  */
-export function onRecordingStop() {
+export function onRecordingStop({ processing = true } = {}) {
   isRecording = false;
 
   if (mouthRenderer) {
-    mouthRenderer.setState(VISUAL_GUIDE_STATES.PROCESSING);
+    mouthRenderer.setState(processing ? VISUAL_GUIDE_STATES.PROCESSING : VISUAL_GUIDE_STATES.IDLE);
   }
 
   const recordBtn = document.getElementById('test-record');
@@ -218,7 +410,7 @@ export function markWordCompleted(index) {
 /**
  * Reset all pronunciation UI for a new question
  */
-export function resetPronunciationForQuestion(text) {
+export function resetPronunciationForQuestion(text, pronunciations = {}) {
   currentTranscript = '';
   isRecording = false;
 
@@ -255,10 +447,9 @@ export function resetPronunciationForQuestion(text) {
     mouthRenderer.setState(VISUAL_GUIDE_STATES.IDLE);
   }
 
-  if (wordProgressRenderer && text) {
-    wordProgressRenderer.setText(text);
-  } else if (wordProgressRenderer) {
-    wordProgressRenderer.reset();
+  const hasVariants = renderPronunciationVariants(text, pronunciations);
+  if (wordProgressRenderer) {
+    wordProgressRenderer.setText(hasVariants ? '' : text);
   }
 }
 

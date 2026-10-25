@@ -1,4 +1,4 @@
-const CACHE_NAME = 'vocabulary-trainer-static-v19';
+const CACHE_NAME = 'vocabulary-trainer-static-v27';
 const STATIC_ASSETS = [
   '/',
   '/index.html',

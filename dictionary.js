@@ -1,4 +1,103 @@
 const DICTIONARY_API_BASE = 'https://api.dictionaryapi.dev/api/v2/entries/en';
+const WIKTIONARY_API_URL = 'https://en.wiktionary.org/w/api.php';
+const PRONUNCIATION_CACHE = new Map();
+const PRONUNCIATION_REQUESTS = new Map();
+const PRONUNCIATION_CACHE_TTL = 30 * 24 * 60 * 60 * 1000;
+const PRONUNCIATION_MISS_CACHE_TTL = 24 * 60 * 60 * 1000;
+
+function getPronunciationAccent(annotation) {
+  const value = String(annotation || '').toLowerCase();
+  const uk = /\b(uk|gb|british|england|scotland|wales|rp|received pronunciation)\b/.test(value);
+  const us = /\b(us|usa|united states|american|general american|genam|ga|california|pacific northwest)\b/.test(value);
+  return { uk, us };
+}
+
+function extractPronunciationTemplate(line, name) {
+  const templatePattern = new RegExp(`\\{\\{\\s*${name}\\s*\\|([^{}]+)\\}\\}`, 'gi');
+  const matches = [...line.matchAll(templatePattern)];
+  return matches.map((match) => match[1].split('|').map((part) => part.trim()));
+}
+
+export function parseWiktionaryPronunciations(wikitext, word) {
+  const variants = {
+    uk: { ipa: '', audio: '', audioSourceUrl: '' },
+    us: { ipa: '', audio: '', audioSourceUrl: '' },
+  };
+  let lastAccent = { uk: false, us: false };
+  let unaccentedIpa = '';
+
+  for (const line of String(wikitext || '').split(/\r?\n/)) {
+    const ipaTemplates = extractPronunciationTemplate(line, 'IPA')
+      .filter((parts) => parts[0]?.toLowerCase() === 'en');
+    if (ipaTemplates.length) {
+      lastAccent = { uk: false, us: false };
+      unaccentedIpa = '';
+      ipaTemplates.forEach((parts) => {
+        const transcription = parts.find((part) => /^[/\[].*[/\]]$/.test(part));
+        const annotation = parts.filter((part) => /^[a-z]+\s*=/i.test(part)).join(' ');
+        const accent = getPronunciationAccent(annotation);
+        if (!transcription) {
+          return;
+        }
+        if (accent.uk && !variants.uk.ipa) {
+          variants.uk.ipa = transcription;
+        }
+        if (accent.us && !variants.us.ipa) {
+          variants.us.ipa = transcription;
+        }
+        if (!accent.uk && !accent.us && !unaccentedIpa) {
+          unaccentedIpa = transcription;
+        }
+        lastAccent = {
+          uk: lastAccent.uk || accent.uk,
+          us: lastAccent.us || accent.us,
+        };
+      });
+    }
+
+    for (const parts of extractPronunciationTemplate(line, 'audio')) {
+      if (parts[0]?.toLowerCase() !== 'en') {
+        continue;
+      }
+      const filename = parts[1] || '';
+      if (!filename || filename.includes('=')) {
+        continue;
+      }
+      const annotation = parts.filter((part) => /^[a-z]+\s*=/i.test(part)).join(' ');
+      const audioAccent = getPronunciationAccent(`${annotation} ${filename}`);
+      const hasExplicitAudioAccent = audioAccent.uk || audioAccent.us;
+      const targetUk = hasExplicitAudioAccent
+        ? audioAccent.uk
+        : lastAccent.uk && !lastAccent.us;
+      const targetUs = hasExplicitAudioAccent
+        ? audioAccent.us
+        : lastAccent.us && !lastAccent.uk;
+      const audioUrl = `https://commons.wikimedia.org/wiki/Special:FilePath/${encodeURIComponent(filename)}`;
+      const audioSourceUrl = `https://commons.wikimedia.org/wiki/File:${encodeURIComponent(filename)}`;
+      if (targetUk && !variants.uk.ipa && unaccentedIpa) {
+        variants.uk.ipa = unaccentedIpa;
+      }
+      if (targetUs && !variants.us.ipa && unaccentedIpa) {
+        variants.us.ipa = unaccentedIpa;
+      }
+      if (targetUk && variants.uk.ipa && !variants.uk.audio) {
+        variants.uk.audio = audioUrl;
+        variants.uk.audioSourceUrl = audioSourceUrl;
+      }
+      if (targetUs && variants.us.ipa && !variants.us.audio) {
+        variants.us.audio = audioUrl;
+        variants.us.audioSourceUrl = audioSourceUrl;
+      }
+    }
+  }
+
+  const pageName = String(word || '').trim().replace(/\s+/g, '_');
+  return {
+    uk: variants.uk.ipa ? variants.uk : null,
+    us: variants.us.ipa ? variants.us : null,
+    sourceUrl: pageName ? `https://en.wiktionary.org/wiki/${encodeURIComponent(pageName)}` : '',
+  };
+}
 
 const STATIC_SUPPORT_DATA = {
   problem: {
@@ -700,6 +799,90 @@ export async function fetchWordIpa(word) {
   } catch (error) {
     console.warn('IPA fetch failed:', error);
     return '';
+  }
+}
+
+async function fetchWiktionaryPronunciationVariants(normalizedWord) {
+  const page = encodeURIComponent(normalizedWord.replace(/ /g, '_'));
+  const url = `${WIKTIONARY_API_URL}?action=parse&page=${page}&prop=wikitext&format=json&formatversion=2&origin=*`;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+  try {
+    const response = await fetch(url, { signal: controller.signal });
+    if (response.status === 404) {
+      return parseWiktionaryPronunciations('', normalizedWord);
+    }
+    if (!response.ok) {
+      throw new Error(`Pronunciation lookup failed (${response.status}) for "${normalizedWord}".`);
+    }
+
+    const data = await response.json();
+    if (data?.error?.code === 'missingtitle') {
+      return parseWiktionaryPronunciations('', normalizedWord);
+    }
+    if (typeof data?.parse?.wikitext !== 'string') {
+      throw new Error(`Pronunciation lookup returned invalid data for "${normalizedWord}".`);
+    }
+
+    return parseWiktionaryPronunciations(data.parse.wikitext, normalizedWord);
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw new Error(`Pronunciation lookup timed out for "${normalizedWord}".`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export async function fetchWordPronunciationVariants(word) {
+  if (!word || typeof word !== 'string') {
+    return { uk: null, us: null, sourceUrl: '' };
+  }
+
+  const normalizedWord = word.trim().replace(/\s+/g, ' ').replace(/^[\p{P}\s]+|[\p{P}\s]+$/gu, '');
+  if (!normalizedWord) {
+    return { uk: null, us: null, sourceUrl: '' };
+  }
+
+  const normalizedKey = normalizedWord.toLocaleLowerCase('en');
+  const sourceUrl = `https://en.wiktionary.org/wiki/${encodeURIComponent(normalizedWord.replace(/\s+/g, '_'))}`;
+  const cacheKeys = {
+    uk: `${normalizedKey}|wiktionary|uk`,
+    us: `${normalizedKey}|wiktionary|us`,
+  };
+  const cachedUk = PRONUNCIATION_CACHE.get(cacheKeys.uk);
+  const cachedUs = PRONUNCIATION_CACHE.get(cacheKeys.us);
+  if (cachedUk?.expiresAt > Date.now() && cachedUs?.expiresAt > Date.now()) {
+    return {
+      uk: cachedUk.variant,
+      us: cachedUs.variant,
+      sourceUrl,
+    };
+  }
+
+  const requestKey = `${normalizedKey}|wiktionary|uk,us`;
+  let request = PRONUNCIATION_REQUESTS.get(requestKey);
+  if (!request) {
+    request = fetchWiktionaryPronunciationVariants(normalizedWord);
+    PRONUNCIATION_REQUESTS.set(requestKey, request);
+  }
+  try {
+    const result = await request;
+    const checkedAt = Date.now();
+    PRONUNCIATION_CACHE.set(cacheKeys.uk, {
+      variant: result.uk,
+      expiresAt: checkedAt + (result.uk ? PRONUNCIATION_CACHE_TTL : PRONUNCIATION_MISS_CACHE_TTL),
+    });
+    PRONUNCIATION_CACHE.set(cacheKeys.us, {
+      variant: result.us,
+      expiresAt: checkedAt + (result.us ? PRONUNCIATION_CACHE_TTL : PRONUNCIATION_MISS_CACHE_TTL),
+    });
+    return result;
+  } finally {
+    if (PRONUNCIATION_REQUESTS.get(requestKey) === request) {
+      PRONUNCIATION_REQUESTS.delete(requestKey);
+    }
   }
 }
 
